@@ -500,6 +500,14 @@ function gridIndex(nx, ny) {
   return idx;
 }
 
+// A point that follows a target like something hanging from it: it lags, overshoots a little and settles.
+// hz is how fast it swings, damp is how quickly the swing dies (1 = no overshoot).
+function springStep(pos, vel, target, hz, damp, dt) {
+  const w = 2 * Math.PI * hz, acc = w * w * (target - pos) - 2 * damp * w * vel;
+  const v = vel + acc * dt;
+  return [pos + v * dt, v];
+}
+
 // One Euro filter: steadies a jittery signal without making fast movement lag.
 class OneEuro {
   constructor(minCutoff = 1.7, beta = 0.3, dCutoff = 1) { this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff; this.x = null; this.dx = 0; this.t = null; }
@@ -545,7 +553,7 @@ class OneEuro {
     sizeId: store.get("size", "M"), fabric: store.get("fabric", FABRICS[0][1]), mode: store.get("mode", "true"), pattern: store.get("pattern", "plain"), ease: 1,
     heightCm: Number(store.get("height", 170)) || 170, fovLong: Number(store.get("fov", 67)) || 67,
     facing: "environment", mirrored: false, running: false, stream: null, track: null, delegate: "--",
-    fps: 0, inferMs: 0, ppcVideo: null, metrics: null, hasPerson: false, lastSeen: 0,
+    fps: 0, drawFps: 0, inferMs: 0, ppcVideo: null, metrics: null, hasPerson: false, lastSeen: 0,
     focus: { last: undefined, changes: 0, min: Infinity, max: -Infinity },
   };
   window.__bench = state; // lets a test harness read the live numbers
@@ -560,7 +568,8 @@ class OneEuro {
   let ppcSmooth = null, lastVideoTime = -1, lastUi = 0, showJoints = false;
 
   /* ----- small UI helpers ----- */
-  function setPill(stateName, text) { el.pill.dataset.state = stateName; el.pillText.textContent = text; }
+  let pillKey = "";
+  function setPill(stateName, text) { if (pillKey === stateName + text) return; pillKey = stateName + text; el.pill.dataset.state = stateName; el.pillText.textContent = text; }
   function showError(msg) { el.error.textContent = msg; el.error.hidden = false; }
   function clearError() { el.error.hidden = true; }
   const fmt = (n, d = 1) => (Number.isFinite(n) ? n.toFixed(d) : "--");
@@ -650,10 +659,10 @@ class OneEuro {
         pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
-        k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, hipY: { value: 50 },
+        k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
       },
       vertexShader: `
-        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY;
+        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv;
         void main() {
           float w = smoothstep(0.0, hipY, position.y);     // 0 at the shoulders, 1 from the hips down
@@ -663,7 +672,8 @@ class OneEuro {
           vec3 p = vec3(position.x * c + position.z * s, position.y, -position.x * s + position.z * c);
           vN = vec3(normal.x * c + normal.z * s, normal.y, -normal.x * s + normal.z * c);
           vG = g; vP = position; vUv = uv;
-          vec2 scr = O + (p.x * Ux + p.y * V) * k; vScr = scr;
+          float sw = smoothstep(sway.z, sway.w, position.y); sw *= sw;   // free cloth below the underarm swings, most at the hem
+          vec2 scr = O + ((p.x + sway.x * sw) * Ux + (p.y + sway.y * sw) * V) * k; vScr = scr;
           gl_Position = projectionMatrix * vec4(scr, p.z * 0.04, 1.0);
         }`,
       fragmentShader: `
@@ -791,7 +801,10 @@ class OneEuro {
     u.loose.value = smooth(1.0, 1.25, state.ease); u.tight.value = smooth(1.0, 0.85, state.ease);
     meshObj.visible = true;
   }
-  function drawGarment(m, map, ppcScreen, ghost, yaw, occ) {
+  // Secondary motion: the hem and the sleeve ends trail the body and swing back, as hanging cloth does.
+  const swing = { p: null, vx: 0, vy: 0, yaw: null, yawV: 0, arm: [null, null], armV: [0, 0] };
+  function resetSwing() { swing.p = null; swing.yaw = null; swing.arm = [null, null]; swing.vx = swing.vy = swing.yawV = 0; swing.armV = [0, 0]; }
+  function drawGarment(m, map, ppcScreen, ghost, yaw, yawHipIn, occ, dt) {
     const S = (p) => ({ x: p.x * map.s + map.ox, y: p.y * map.s + map.oy });
     const ms = { ...m, L: S(m.L), R: S(m.R), sMid: S(m.sMid), hMid: S(m.hMid), hipL: S(m.hipL), hipR: S(m.hipR), elbowL: m.elbowL && S(m.elbowL), elbowR: m.elbowR && S(m.elbowR) };
     const axes = garmentAxes(ms), fr = bodyFrames(m, axes);
@@ -799,13 +812,36 @@ class OneEuro {
     const lift = 0.2 * effectiveShoulderPx(m) * map.s;
     const O = sub(ms.sMid, mul(axes.v, lift));
     const hipY = m.hipsOk ? (m.torsoPx * map.s + lift) / ppcScreen : 1e4;
-    let twist = (state.yawHip == null ? yaw : state.yawHip) - yaw; twist = Math.atan2(Math.sin(twist), Math.cos(twist));
-    const yawHip = yaw + Math.max(-0.6, Math.min(0.6, twist));
+    const clamp = (x, a) => Math.max(-a, Math.min(a, x));
+    const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    const looseness = 0.5 + 0.8 * smooth(1.0, 1.25, state.ease);
+
+    // Hem: a point that follows the hem's place on the body with a soft spring.
+    const A = add(O, mul(axes.v, 0.85 * spec.length * ppcScreen));
+    if (!swing.p || len(sub(swing.p, A)) > 30 * ppcScreen) { swing.p = { ...A }; swing.vx = swing.vy = 0; }
+    [swing.p.x, swing.vx] = springStep(swing.p.x, swing.vx, A.x, 2.1, 0.32, dt);
+    [swing.p.y, swing.vy] = springStep(swing.p.y, swing.vy, A.y, 2.6, 0.5, dt);
+    const off = sub(swing.p, A);
+    const swayX = clamp((dot(off, fr.uHip) / ppcScreen) * looseness, 9), swayY = clamp((dot(off, axes.v) / ppcScreen) * 0.35, 2.5);
+    // Twist: the hem turns after the hips do.
+    const hipTarget = yaw + clamp(wrap(yawHipIn - yaw), 0.6);
+    if (swing.yaw == null) swing.yaw = hipTarget;
+    swing.yaw = hipTarget + wrap(swing.yaw - hipTarget);
+    [swing.yaw, swing.yawV] = springStep(swing.yaw, swing.yawV, hipTarget, 1.8, 0.4, dt);
+    const yawHip = yaw + clamp(wrap(swing.yaw - yaw), 0.8);
+
     aim(torso, O, fr.uTop, fr.uHip, axes.v, ppcScreen, yaw, yawHip, hipY, ghost);
-    for (const [meshObj, side] of [[sleeveL, 1], [sleeveR, -1]]) {
-      setTube(meshObj, sleeveTube(spec, side, armDir(ms, { u: fr.uTop, v: axes.v }, side), yaw, NA, NS));
+    torso.material.uniforms.sway.value.set(swayX, swayY, spec.armhole, spec.length);
+    [[sleeveL, 1], [sleeveR, -1]].forEach(([meshObj, side], i) => {
+      const d = armDir(ms, { u: fr.uTop, v: axes.v }, side), target = Math.atan2(d.y, d.x);
+      if (swing.arm[i] == null) swing.arm[i] = target;
+      swing.arm[i] = target + wrap(swing.arm[i] - target);
+      [swing.arm[i], swing.armV[i]] = springStep(swing.arm[i], swing.armV[i], target, 3.0, 0.45, dt);
+      const ang = target + clamp(swing.arm[i] - target, 0.35);
+      setTube(meshObj, sleeveTube(spec, side, { x: Math.cos(ang), y: Math.sin(ang) }, yaw, NA, NS));
       aim(meshObj, O, fr.uTop, fr.uTop, axes.v, ppcScreen, 0, 0, 1, ghost);
-    }
+      meshObj.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
+    });
     for (const mt of materials) {
       const A = mt.uniforms.capA.value, B = mt.uniforms.capB.value;
       for (let i = 0; i < 8; i++) {
@@ -946,45 +982,72 @@ class OneEuro {
     schedule();
   }
 
+  // The tracker reports roughly 18 times a second on a mid-range phone; the screen redraws up to 60 times a second.
+  // onPose records what the tracker saw. frame() eases the drawn pose towards it on every redraw, so movement is smooth.
+  const pose = { target: null, world: null, lm: null, yaw: 0, yawHip: 0, ppc: null };
   function onPose(res, now) {
     const v = el.video, vw = v.videoWidth, vh = v.videoHeight;
-    const W = el.view.clientWidth, H = el.view.clientHeight, map = coverMap(vw, vh, W, H);
     const raw = res && res.landmarks && res.landmarks[0];
-    if (!raw) {
-      state.hasPerson = false; state.metrics = null; hideGarment(); joints.visible = false;
-      if (now - state.lastSeen > 400) { setPill("warn", "No one in view"); el.tape.hidden = true; }
-      updateGuide(null, now); renderer.render(scene, camera); updateUi(now); return;
-    }
+    if (!raw) { state.hasPerson = false; pose.target = null; return; }
     state.lastSeen = now; state.hasPerson = true;
     const t = now / 1000;
     const lm = raw.map((p, i) => ({ x: filters[i][0].filter(p.x, t), y: filters[i][1].filter(p.y, t), visibility: p.visibility }));
-    const m = bodyMetrics(lm, vw, vh); state.metrics = m;
+    const m = bodyMetrics(lm, vw, vh);
     // How far the wearer has turned, from the depth difference between the two shoulders (0 = facing the camera).
     const w = res.worldLandmarks && res.worldLandmarks[0];
     if (w) { const a = Math.atan2(w[LM.SH_L].z - w[LM.SH_R].z, w[LM.SH_L].x - w[LM.SH_R].x); state.yaw = Math.atan2(yawSin.filter(Math.sin(a), t), yawCos.filter(Math.cos(a), t));
       const b = Math.atan2(w[LM.HIP_L].z - w[LM.HIP_R].z, w[LM.HIP_L].x - w[LM.HIP_R].x); state.yawHip = Math.atan2(hipSin.filter(Math.sin(b), t), hipCos.filter(Math.cos(b), t)); }
+    pose.target = lm; pose.world = w || null;
     // Ease: garment shoulder width against the wearer's. Above 1 the shirt is loose, below 1 it pulls.
     state.ease = state.mode === "true" && calib.locked ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
     calib.add(m, state.heightCm);
-    sampleLight(now); updateGuide(m, now);
+    sampleLight(now);
     const ppc = calib.ppc(m);
     if (ppc) ppcSmooth = ppcSmooth == null ? ppc : ppcSmooth + 0.25 * (ppc - ppcSmooth);
     state.ppcVideo = calib.locked ? ppcSmooth : null;
+  }
 
-    if (!m.shouldersOk) { hideGarment(); setPill("warn", "Shoulders not visible"); }
+  let lastFrame = 0, lastTape = 0;
+  function frame(now) {
+    if (!state.running) return;
+    requestAnimationFrame(frame);
+    const v = el.video, vw = v.videoWidth, vh = v.videoHeight;
+    if (!renderer || !vw) return;
+    const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000)); lastFrame = now;
+    state.drawFps += 0.1 * (1 / dt - state.drawFps);
+    const W = el.view.clientWidth, H = el.view.clientHeight, map = coverMap(vw, vh, W, H);
+    if (!pose.target) {
+      state.metrics = null; pose.lm = null; pose.ppc = null; hideGarment(); joints.visible = false; resetSwing();
+      if (now - state.lastSeen > 400) { setPill("warn", "No one in view"); el.tape.hidden = true; }
+      updateGuide(null, now); renderer.render(scene, camera); updateUi(now); return;
+    }
+    const k = 1 - Math.exp(-dt * 26), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    if (!pose.lm) { pose.lm = pose.target.map((p) => ({ ...p })); pose.yaw = state.yaw || 0; pose.yawHip = state.yawHip == null ? pose.yaw : state.yawHip; }
+    else {
+      pose.target.forEach((p, i) => { const q = pose.lm[i]; q.x += k * (p.x - q.x); q.y += k * (p.y - q.y); q.visibility = p.visibility; });
+      pose.yaw += k * wrap((state.yaw || 0) - pose.yaw); pose.yawHip += k * wrap((state.yawHip == null ? state.yaw || 0 : state.yawHip) - pose.yawHip);
+    }
+    if (state.ppcVideo) pose.ppc = pose.ppc == null ? state.ppcVideo : pose.ppc + k * (state.ppcVideo - pose.ppc); else pose.ppc = null;
+    const lm = pose.lm, m = bodyMetrics(lm, vw, vh); state.metrics = m;
+    updateGuide(m, now);
+
+    if (!m.shouldersOk) { hideGarment(); resetSwing(); setPill("warn", "Shoulders not visible"); }
     else {
       const fitPpc = (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
-      const trueSize = state.mode === "true" && state.ppcVideo;
-      const usePpc = trueSize ? state.ppcVideo : fitPpc;
-      drawGarment(m, map, usePpc * map.s, state.mode === "true" && !trueSize, state.yaw || 0, occluders(lm, w, vw, vh, m, spec.sleeve * 0.92 * usePpc));
+      const trueSize = state.mode === "true" && pose.ppc;
+      const usePpc = trueSize ? pose.ppc : fitPpc;
+      drawGarment(m, map, usePpc * map.s, state.mode === "true" && !trueSize, pose.yaw, pose.yawHip, occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), dt);
       if (state.mode === "fit") setPill("warn", "Fit to body: not to scale");
       else if (trueSize) setPill("ok", "True size, scale set");
       else setPill("warn", m.upright ? "Setting scale, hold still" : m.fullBody ? "Stand straight, facing the camera" : "Step back: head and feet in view");
     }
-    if (state.ppcVideo) {
-      el.tape.hidden = false; el.tapeBar.style.width = Math.max(8, 10 * state.ppcVideo * map.s).toFixed(1) + "px";
-      el.tape.style.bottom = (el.sheet.offsetWidth < W ? 12 : el.sheet.offsetHeight + 8) + "px";
-    } else el.tape.hidden = true;
+    if (now - lastTape > 200) {                             // the on-screen 10 cm tape; no need to move it every redraw
+      lastTape = now;
+      if (pose.ppc) {
+        el.tape.hidden = false; el.tapeBar.style.width = Math.max(8, 10 * pose.ppc * map.s).toFixed(1) + "px";
+        el.tape.style.bottom = (el.sheet.offsetWidth < W ? 12 : el.sheet.offsetHeight + 8) + "px";
+      } else el.tape.hidden = true;
+    }
 
     joints.visible = showJoints;
     if (showJoints) {
@@ -1029,7 +1092,7 @@ class OneEuro {
       dist: distanceNow() ? `${fmt(distanceNow(), 2)} m` : "needs the scale: head and feet in view",
       scale: state.ppcVideo ? `${fmt(state.ppcVideo, 2)} video pixels per cm` : "not set",
       video: v.videoWidth ? `${v.videoWidth} x ${v.videoHeight}, ${settings.frameRate ? fmt(settings.frameRate, 0) + " fps" : "rate not reported"}, ${state.facing} camera` : "--",
-      speed: `${fmt(state.fps, 0)} per second, ${fmt(state.inferMs, 0)} ms each`,
+      speed: `${fmt(state.fps, 0)} per second, ${fmt(state.inferMs, 0)} ms each; screen redraws ${fmt(state.drawFps, 0)} per second`,
       delegate: state.delegate, settings, caps,
     };
   }
@@ -1070,7 +1133,7 @@ class OneEuro {
     try { if (!landmarker) await loadTracker(); }
     catch (e) { console.error(e); showError("The tracking software did not load. Check the internet connection and reload. (" + (e && e.message ? e.message : e) + ")"); setPill("bad", "Tracker not loaded"); return; }
     setPill("warn", "Looking for a person");
-    if (!state.running) { state.running = true; schedule(); }
+    if (!state.running) { state.running = true; schedule(); requestAnimationFrame(frame); }
   }
 
   buildControls();
