@@ -64,18 +64,8 @@ button { cursor: pointer; }
   background-image: repeating-linear-gradient(90deg, var(--tape-ink) 0 1px, transparent 1px 10%);
 }
 
-.guide { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 10px; pointer-events: none;
-  padding: calc(62px + env(safe-area-inset-top, 0px)) var(--gutter-r) calc(14px + env(safe-area-inset-bottom, 0px)) var(--gutter-l); }
-.guide-figure { flex: 1 1 0; min-height: 0; max-width: 86%; fill: none; stroke: var(--chalk); stroke-width: 1.6; stroke-dasharray: 4 3; stroke-linejoin: round; opacity: .9; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .7)); }
-.guide[data-state="good"] .guide-figure { stroke: var(--tape); stroke-dasharray: none; }
-.guide[data-state="done"] .guide-figure { stroke: var(--ok); stroke-dasharray: none; }
-.guide-card { pointer-events: auto; width: min(100%, 360px); display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(16, 20, 27, .9); text-align: center; }
-.guide-card p { margin: 0; font: 600 17px/1.3 var(--ui); text-wrap: balance; }
-.guide-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.guide-bar div { height: 100%; width: 0; background: var(--tape); }
-.guide[data-state="done"] .guide-bar div { background: var(--ok); }
-.guide-card .btn { flex: none; background: transparent; color: var(--muted); }
-.stage.guiding .sheet { display: none; }
+.hint { position: absolute; left: var(--gutter-l); right: var(--gutter-r); top: calc(58px + env(safe-area-inset-top, 0px)); pointer-events: none; display: flex; }
+.hint span { padding: 6px 11px; border-radius: 8px; background: rgba(16, 20, 27, .78); border: 1px solid var(--line); font-size: 13px; line-height: 1.3; max-width: 34ch; }
 .sheet {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 10px;
   padding: 10px var(--gutter-r) calc(12px + env(safe-area-inset-bottom, 0px)) var(--gutter-l);
@@ -151,14 +141,7 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
 
   <div class="tape" id="tape" hidden><div class="tape-bar" id="tapeBar"></div><span>10 cm at the wearer</span></div>
 
-  <div class="guide" id="guide" hidden>
-    <svg class="guide-figure" viewBox="0 0 100 230" aria-hidden="true"><circle cx="50" cy="17" r="13"/><path d="M50 34 C36 34 24 40 22 52 L16 108 C15 114 23 116 24 110 L30 66 L31 124 L29 216 C29 224 41 224 42 216 L48 134 L52 134 L58 216 C59 224 71 224 71 216 L69 124 L70 66 L76 110 C77 116 85 114 84 108 L78 52 C76 40 64 34 50 34 Z"/></svg>
-    <div class="guide-card">
-      <p id="guideText" aria-live="polite">Step into view</p>
-      <div class="guide-bar"><div id="guideFill"></div></div>
-      <button class="btn" id="guideSkip" type="button">Skip: fit the shirt to the body instead</button>
-    </div>
-  </div>
+  <div class="hint" id="hint" hidden><span id="hintText"></span></div>
 
   <section class="sheet" id="sheet" aria-label="Garment controls">
     <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true">Hide controls</button>
@@ -229,8 +212,8 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
     <p>A test of live body tracking and true-to-scale garment drawing on this phone. It draws an example T-shirt at its real measurements, so a size that is too small looks too small.</p>
     <ol>
       <li>Enter the wearer's height.</li>
-      <li>Prop the phone up, or have someone hold it, so the wearer's head and feet are both in the picture.</li>
-      <li>Once the scale is set, step closer if you like and try the sizes.</li>
+      <li>Face the camera with head and hips in the picture. The shirt appears at an approximate true size straight away.</li>
+      <li>For an exact size, step back once so head and feet are both in the picture. Then move as you like.</li>
     </ol>
     <div class="field">
       <label for="height0">Wearer height</label>
@@ -333,13 +316,16 @@ function bodyMetrics(lm, vw, vh) {
   // legs unbent (hip to heel nearly as long as hip-knee plus knee-heel) and shoulders not turned away.
   const legStraight = (hip, knee, heel) => {
     const a = len(sub(P(knee), P(hip))) + len(sub(P(heel), P(knee)));
-    return a > 0 && len(sub(P(heel), P(hip))) / a > 0.985;
+    return a > 0 && len(sub(P(heel), P(hip))) / a > 0.975;
   };
   const shoulderPx0 = len(sub(L, R)), torsoPx0 = len(sub(hMid, sMid));
+  const eyeHipPx = len(sub(hMid, eyeMid));
+  const upper = shouldersOk && hipsOk && [LM.EYE_L, LM.EYE_R].every((i) => vis(i) > 0.6 && inFrame(i)) &&
+    shoulderPx0 > 0.55 * torsoPx0 && hMid.y > sMid.y && Math.abs(hMid.x - eyeMid.x) < 0.2 * eyeHipPx;
   const upright = fullBody && legStraight(LM.HIP_L, LM.KNEE_L, LM.HEEL_L) && legStraight(LM.HIP_R, LM.KNEE_R, LM.HEEL_R) &&
     shoulderPx0 > 0.55 * torsoPx0 && Math.abs(heelMid.x - eyeMid.x) < 0.2 * len(sub(heelMid, eyeMid));
   return {
-    L, R, sMid, hMid, shouldersOk, hipsOk, fullBody, upright,
+    L, R, sMid, hMid, shouldersOk, hipsOk, fullBody, upright, upper, eyeHipPx,
     shoulderPx: len(sub(L, R)),
     torsoPx: len(sub(hMid, sMid)),
     eyeHeelPx: len(sub(heelMid, eyeMid)),
@@ -356,16 +342,25 @@ function bodyMetrics(lm, vw, vh) {
 // Turns "this person is H cm tall" into a ruler that keeps working after their feet leave the picture.
 // While head and feet are visible, it learns two body lengths in cm. Afterwards the scale is whichever
 // of the two gives the larger pixels-per-cm, because turning or leaning can only make a length look shorter.
+// It works in two steps. With head and hips in view it takes an approximate scale from eye-to-hip distance, so
+// the shirt can be drawn at about true size straight away, even sitting down. Once head and feet are in view
+// it switches to the exact scale from full height. Either way it learns two body lengths in cm, and afterwards the
+// scale is whichever of the two gives the larger pixels-per-cm, because turning or leaning can only shorten a length.
+const EYE_HIP_RATIO = 0.41;    // eye-to-hip-joint distance as a share of standing height; varies a few percent between people
 class Calibrator {
   constructor() { this.reset(); }
-  reset() { this.sh = []; this.to = []; this.shoulderCm = null; this.torsoCm = null; }
+  reset() { this.sh = []; this.to = []; this.rsh = []; this.rto = []; this.shoulderCm = null; this.torsoCm = null; this.exact = false; }
   get locked() { return this.shoulderCm != null; }
   add(m, heightCm) {
-    if (!m.upright || !(heightCm > 0)) return;
-    const ppc = m.eyeHeelPx / EYE_HEEL_RATIO / heightCm;
-    this.sh.push(m.shoulderPx / ppc); this.to.push(m.torsoPx / ppc);
-    if (this.sh.length > 60) { this.sh.shift(); this.to.shift(); }
-    if (this.sh.length >= 15) { this.shoulderCm = quantile(this.sh, 0.75); this.torsoCm = quantile(this.to, 0.5); }
+    if (!(heightCm > 0)) return;
+    const push = (a, b, ppc) => { a.push(m.shoulderPx / ppc); b.push(m.torsoPx / ppc); if (a.length > 60) { a.shift(); b.shift(); } };
+    if (m.upright) {
+      push(this.sh, this.to, m.eyeHeelPx / EYE_HEEL_RATIO / heightCm);
+      if (this.sh.length >= 12) { this.shoulderCm = quantile(this.sh, 0.75); this.torsoCm = quantile(this.to, 0.5); this.exact = true; }
+    } else if (m.upper && !this.exact) {
+      push(this.rsh, this.rto, m.eyeHipPx / EYE_HIP_RATIO / heightCm);
+      if (this.rsh.length >= 12) { this.shoulderCm = quantile(this.rsh, 0.75); this.torsoCm = quantile(this.rto, 0.5); }
+    }
   }
   ppc(m) {
     if (!this.locked) return null;
@@ -576,14 +571,14 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "13 (straight underarm seam, no dent)";
+  const BUILD = "14 (true size without the outline step)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
   const $ = (id) => document.getElementById(id);
   const el = {
     view: $("view"), video: $("cam"), canvas: $("gl"), pill: $("pill"), pillText: $("pillText"), meter: $("meter"),
-    stage: $("stage"), guide: $("guide"), guideText: $("guideText"), guideFill: $("guideFill"), tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
+    stage: $("stage"), hint: $("hint"), hintText: $("hintText"), tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
     sizes: $("sizes"), swatches: $("swatches"), height: $("height"), height0: $("height0"),
     factGarment: $("factGarment"), factBody: $("factBody"), modeTrue: $("modeTrue"), modeFit: $("modeFit"),
     probe: $("probe"), start: $("start"), error: $("error"), fov: $("fov"), devices: $("devices"), pDump: $("pDump"),
@@ -959,22 +954,21 @@ class OneEuro {
     } catch { /* lighting match is optional */ }
   }
 
-  /* ----- guided setup ----- */
-  let guideKey = "", guideDoneUntil = 0, wasLocked = false;
-  function updateGuide(m, now) {
-    if (calib.locked && !wasLocked) { guideDoneUntil = now + 1800; if (navigator.vibrate) navigator.vibrate(60); }
-    wasLocked = calib.locked;
-    const active = state.running && state.mode === "true" && (!calib.locked || now < guideDoneUntil);
-    let st = "idle", text = "Step into view", fill = 0;
-    if (calib.locked) { st = "done"; text = "Scale set. Step closer and try the sizes."; fill = 1; }
-    else if (m && m.upright) { st = "good"; text = "Hold still"; fill = Math.min(1, calib.sh.length / 15); }
-    else if (m && m.fullBody) text = "Stand straight and face the camera";
-    else if (m) text = "Step back until head and feet fit the outline";
-    const key = active + st + text + fill.toFixed(2);
-    if (key === guideKey) return; guideKey = key;
-    el.guide.hidden = !active; el.stage.classList.toggle("guiding", active);
-    el.guide.dataset.state = st; el.guideText.textContent = text; el.guideFill.style.width = (fill * 100).toFixed(0) + "%";
+  /* ----- scale hint: one quiet line, no overlay ----- */
+  let hintKey = "", lockState = "";
+  function updateGuide(m) {
+    const now = calib.exact ? "exact" : calib.locked ? "approx" : "";
+    if (now !== lockState) { lockState = now; if (now && navigator.vibrate) navigator.vibrate(now === "exact" ? [40, 60, 40] : 40); }
+    let text = "";
+    if (state.running && state.mode === "true" && !calib.exact) {
+      if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
+      else if (m && (m.upper || m.upright)) text = "Measuring. Hold still for a moment.";
+      else if (m) text = "Face the camera with head and hips in view.";
+    }
+    if (text === hintKey) return; hintKey = text;
+    el.hint.hidden = !text; el.hintText.textContent = text;
   }
+
   function hideGarment() { if (torso) torso.visible = sleeveL.visible = sleeveR.visible = false; }
 
   /* ----- camera ----- */
@@ -1117,10 +1111,10 @@ class OneEuro {
       const fitPpc = (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
       const trueSize = state.mode === "true" && pose.ppc;
       const usePpc = trueSize ? pose.ppc : fitPpc;
-      drawGarment(m, map, usePpc * map.s, state.mode === "true" && !trueSize, pose.yaw, pose.yawHip, occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), dt);
+      drawGarment(m, map, usePpc * map.s, false, pose.yaw, pose.yawHip, occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), dt);
       if (state.mode === "fit") setPill("warn", "Fit to body: not to scale");
-      else if (trueSize) setPill("ok", "True size, scale set");
-      else setPill("warn", m.upright ? "Setting scale, hold still" : m.fullBody ? "Stand straight, facing the camera" : "Step back: head and feet in view");
+      else if (trueSize) setPill(calib.exact ? "ok" : "warn", calib.exact ? "True size, scale set" : "True size, approximate");
+      else setPill("warn", "Fitted to body until measured");
     }
     if (now - lastTape > 200) {                             // the on-screen 10 cm tape; no need to move it every redraw
       lastTape = now;
@@ -1171,7 +1165,7 @@ class OneEuro {
       focusMode: settings.focusMode || (caps && caps.focusMode ? "modes: " + caps.focusMode.join(", ") : "not reported"),
       focusChanges: typeof f.last === "number" ? `${f.changes} (seen ${f.min} to ${f.max})` : "--",
       dist: distanceNow() ? `${fmt(distanceNow(), 2)} m` : "needs the scale: head and feet in view",
-      scale: state.ppcVideo ? `${fmt(state.ppcVideo, 2)} video pixels per cm` : "not set",
+      scale: state.ppcVideo ? `${fmt(state.ppcVideo, 2)} video pixels per cm (${calib.exact ? "exact, from full height" : "approximate, from head to hips"})` : "not set",
       video: v.videoWidth ? `${v.videoWidth} x ${v.videoHeight}, ${settings.frameRate ? fmt(settings.frameRate, 0) + " fps" : "rate not reported"}, ${state.facing} camera` : "--",
       speed: `${fmt(state.fps, 0)} per second, ${fmt(state.inferMs, 0)} ms each; screen redraws ${fmt(state.drawFps, 0)} per second`,
       delegate: state.delegate, settings, caps,
@@ -1238,7 +1232,6 @@ class OneEuro {
   for (const b of document.querySelectorAll("#patterns [data-pattern]")) b.addEventListener("click", () => selectPattern(b.dataset.pattern));
   $("printBtn").addEventListener("click", () => { if (printTex) setPrint(null); else if (!THREE) showError("Start the camera first, then add a print."); else $("printFile").click(); });
   $("printFile").addEventListener("change", (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) { clearError(); setPrint(f); } });
-  $("guideSkip").addEventListener("click", () => { setMode("fit"); updateGuide(state.metrics, performance.now()); });
   $("copyProbe").addEventListener("click", async (ev) => {
     const text = probeText(probeFacts()), btn = ev.currentTarget;
     try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
