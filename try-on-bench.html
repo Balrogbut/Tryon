@@ -305,6 +305,7 @@ const dot = (a, b) => a.x * b.x + a.y * b.y;
 const len = (a) => Math.hypot(a.x, a.y);
 const norm = (a) => { const l = len(a) || 1; return { x: a.x / l, y: a.y / l }; };
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // Body measurements in video pixels from one set of landmarks.
 function bodyMetrics(lm, vw, vh) {
@@ -396,34 +397,43 @@ function torsoTube(spec, nr, ny) {
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = sx / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
       pos[n] = hw * sx; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
-      nrm[n] = nx / nl; nrm[n + 1] = 0; nrm[n + 2] = nz / nl;
+      const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fl = Math.hypot(fx, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
+      nrm[n] = fx / fl; nrm[n + 1] = 0; nrm[n + 2] = fz / fl;
       g[n] = sx; g[n + 1] = t; g[n + 2] = 0;
     }
   }
   return { pos, nrm, g };
 }
 
-// Sleeve as a tapering tube that leaves the armhole along the arm. d is the arm direction in the picture plane,
-// yaw is how far the torso has turned, so the sleeve starts from where the shoulder has moved to.
+// Sleeve as a tube sewn to the armhole. Its first ring is the armhole itself, running from the shoulder point
+// to the underarm point on the side of the torso, so the two pieces always meet. From there the tube bends
+// towards the arm direction d (in the picture plane). yaw is how far the torso has turned.
 function sleeveTube(spec, side, d, yaw, na, nr) {
   const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3);
-  const bx = side * 0.5 * (spec.shHalf + spec.chHalf) * 0.96, by = 0.5 * (spec.drop + spec.armhole);
-  const B = { x: bx * Math.cos(yaw), y: by, z: -bx * Math.sin(yaw) };
-  const r0 = 0.5 * (spec.armhole - spec.drop) * 0.95, r1 = 0.5 * spec.sleeveOpen;
+  const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+  const top = { x: side * spec.shHalf, y: spec.drop }, pit = { x: side * spec.chHalf, y: spec.armhole };
+  const c0 = mid(top, pit), half = len(sub(pit, top)) / 2, down = norm(sub(pit, top));
+  let n0 = { x: side * down.y * cyaw, y: -side * down.x };          // outward from the armhole, as seen after the turn
+  n0 = len(n0) < 0.2 ? d : norm(n0);
+  let c = sub({ x: c0.x * cyaw, y: c0.y }, mul(n0, 1.5));            // start 1.5 cm inside the body so no gap can open
+  const cz = -c0.x * syaw, step = (spec.sleeve * 0.95 + 1.5) / (na - 1);
+  const r1 = 0.5 * spec.sleeveOpen, rz0 = 0.8 * half;
   for (let j = 0; j < na; j++) {
-    const a = j / (na - 1), along = (-0.12 + 1.12 * a) * spec.sleeve * 0.92, r = r0 + (r1 - r0) * a;
+    const a = j / (na - 1), w = smooth(0, 0.6, a);
+    const t = norm({ x: n0.x + (d.x - n0.x) * w, y: n0.y + (d.y - n0.y) * w });
+    if (j > 0) c = add(c, mul(t, step));
+    const e1 = { x: -t.y * side, y: t.x * side };                    // across the sleeve, pointing to its underside
+    const r = half + (r1 - half) * a, rz = rz0 + (r1 - rz0) * a;
     for (let i = 0; i < cols; i++) {
-      const th = (2 * Math.PI * i) / nr, c = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
-      const nx = -d.y * c, ny = d.x * c, nz = sn;
-      pos[n] = B.x + d.x * along + r * nx; pos[n + 1] = B.y + d.y * along + r * ny; pos[n + 2] = B.z + r * nz;
-      nrm[n] = nx; nrm[n + 1] = ny; nrm[n + 2] = nz;
-      g[n] = c; g[n + 1] = a; g[n + 2] = 1;
+      const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
+      pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = cz + rz * sn;
+      const nx = e1.x * co * rz, ny = e1.y * co * rz, nz = sn * r, nl = Math.hypot(nx, ny, nz) || 1;
+      nrm[n] = nx / nl; nrm[n + 1] = ny / nl; nrm[n + 2] = nz / nl;
+      g[n] = co; g[n + 1] = a; g[n + 2] = 1;
     }
   }
   return { pos, nrm, g };
 }
-
-const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // Body parts that sit in front of the garment, as tapered capsules in video pixels:
 // [ax, ay, bx, by, radiusA, radiusB, strength 0..1, torsoOnly]. The neck and head always cover the collar.
@@ -491,7 +501,7 @@ class OneEuro {
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
-  const NR = 28, NY = 18, NA = 6, NS = 12;
+  const NR = 28, NY = 18, NA = 9, NS = 14;
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -615,7 +625,9 @@ class OneEuro {
             cover = max(cover, b.z * (1.0 - smoothstep(-2.5, 2.5, d)));
           }
           if (cover > 0.97) discard;
-          float aOut = alpha * (1.0 - cover);
+          float aBase = alpha;
+          if (alpha < 0.9) { if (mod(floor(gl_FragCoord.x * 0.5) + floor(gl_FragCoord.y * 0.5), 2.0) < 1.0) discard; aBase = 1.0; }
+          float aOut = aBase * (1.0 - cover);
           vec3 n = normalize(vN);
           bool inside = n.z < 0.0;                          // surface faces away: we are looking at the inside of the garment
           if (inside && alpha < 0.9) discard;               // the see-through preview shows the outside only
