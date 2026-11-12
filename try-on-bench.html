@@ -561,6 +561,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  const BUILD = "9 (shoulders shaped to the wearer)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
@@ -1139,6 +1140,7 @@ class OneEuro {
   function probeText(p) {
     return [
       "TRY-ON BENCH READOUT",
+      "Version: " + BUILD,
       "Browser: " + navigator.userAgent,
       "Camera: " + (state.track ? state.track.label || "(no name)" : "not started"),
       "Video: " + p.video,
@@ -1169,6 +1171,7 @@ class OneEuro {
     if (!state.running) { state.running = true; schedule(); requestAnimationFrame(frame); }
   }
 
+  $("startNote").textContent += " Version " + BUILD + ".";
   buildControls();
   $("startRear").addEventListener("click", () => begin("environment"));
   $("startFront").addEventListener("click", () => begin("user"));
