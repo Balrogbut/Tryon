@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Darzi Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap">
+<style>
+:root { --paper: #f5f6f3; --card: #fff; --ink: #10141b; --muted: #5a6370; --line: #d8dbd4; --tape: #f2c230; --tape-ink: #1d1803; --ok: #23764a; --bad: #b3392c; --chalk: #2c5a86;
+  --display: "Bricolage Grotesque", "Inter", system-ui, sans-serif; --body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --data: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); }
+[hidden] { display: none !important; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--chalk); outline-offset: 2px; }
+.wrap { max-width: 1000px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header .wrap { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-block: 14px; }
+h1 { font: 700 24px/1 var(--display); margin: 0; letter-spacing: -.02em; }
+h2 { font: 700 18px/1.2 var(--display); margin: 0; }
+.tabs { display: flex; gap: 2px; flex: 1 1 auto; }
+.tabs button { padding: 7px 12px; border: 0; background: none; border-radius: 6px; color: var(--muted); font-weight: 500; }
+.tabs button[aria-selected="true"] { background: #e9ebe5; color: var(--ink); }
+.warn { background: #fdf3cf; border-block: 1px solid #e4cd72; font-size: 14px; }
+.warn .wrap { padding-block: 9px; }
+main { padding-block: 22px 60px; display: flex; flex-direction: column; gap: 18px; }
+.bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn { padding: 9px 14px; border-radius: 4px; border: 1px solid var(--ink); background: transparent; font-weight: 600; text-decoration: none; display: inline-block; }
+.btn.primary { background: var(--tape); border-color: var(--tape-ink); color: var(--tape-ink); }
+.btn.danger { border-color: var(--bad); color: var(--bad); }
+.btn.small { padding: 5px 9px; font-size: 13px; }
+.table { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 500 11px/1.2 var(--data); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-family: var(--data); }
+.thumb { width: 44px; height: 44px; }
+.thumb svg { width: 100%; height: 100%; }
+.editor { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 22px; align-items: start; background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 18px; }
+.fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > label, .field > span.l { font-size: 13px; font-weight: 600; }
+.field input, .field select, .field textarea { padding: 8px 10px; border: 1px solid #b9bdb5; border-radius: 4px; background: #fff; width: 100%; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+.cols { display: flex; flex-wrap: wrap; gap: 8px; }
+.cols label { display: inline-flex; gap: 6px; align-items: center; padding: 4px 8px 4px 4px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; }
+.cols i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(16, 20, 27, .3); }
+.chart input { width: 74px; padding: 6px 7px; border: 1px solid #b9bdb5; border-radius: 4px; font-family: var(--data); }
+.chart input.id { width: 84px; }
+.preview { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.preview .pic { border: 1px solid var(--line); border-radius: 4px; padding: 10%; background: var(--paper); }
+.preview svg { width: 100%; height: auto; display: block; }
+.err { color: var(--bad); font-size: 13px; font-weight: 500; }
+pre { margin: 0; padding: 12px; background: var(--card); border: 1px dashed #9aa093; border-radius: 4px; font: 13px/1.5 var(--data); white-space: pre-wrap; overflow-wrap: anywhere; }
+textarea.json { width: 100%; min-height: 160px; font: 12.5px/1.45 var(--data); padding: 10px; border: 1px solid #b9bdb5; border-radius: 4px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 999px; font-weight: 500; }
+@media (max-width: 720px) { .editor { grid-template-columns: minmax(0, 1fr); } .preview { position: static; max-width: 200px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1 id="title">Darzi Admin</h1>
+  <div class="tabs" role="tablist"><button role="tab" data-tab="products" aria-selected="true">Products</button><button role="tab" data-tab="orders" aria-selected="false">Orders</button><button role="tab" data-tab="settings" aria-selected="false">Settings</button></div>
+  <a class="btn small" href="index.html">View shop</a>
+</div></header>
+<div class="warn"><div class="wrap">Demo admin: there is no login, and changes are saved in this browser only. Customers on other devices see the example catalogue until the shop has a server.</div></div>
+<main class="wrap" id="view"></main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="store-data.js"></script>
+<script>
+(() => {
+  "use strict";
+  const S = window.DarziStore, esc = S.esc, $ = (id) => document.getElementById(id), view = $("view");
+  let products = S.products(), tab = "products", editing = null, draft = null;
+  $("title").textContent = S.settings().name + " Admin"; document.title = S.settings().name + " Admin";
+  function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { el.hidden = true; }, 2400); }
+  const blank = () => ({ id: "", name: "", group: "men", price: 1500, pattern: "plain", colours: [S.COLOURS[1]], chart: JSON.parse(JSON.stringify(S.CHARTS.men)), stock: Object.fromEntries(S.CHARTS.men.map((r) => [r.id, 5])), desc: "", print: null });
+  const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "item";
+
+  function render() {
+    for (const b of document.querySelectorAll("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+    if (tab === "products") editing == null ? listProducts() : editProduct();
+    else if (tab === "orders") listOrders(); else showSettings();
+  }
+
+  /* ----- products ----- */
+  function listProducts() {
+    view.innerHTML = `<div class="bar"><h2 style="flex:1">Products (${products.length})</h2><button class="btn primary" data-act="new">Add product</button><button class="btn" data-act="export">Export catalogue</button><button class="btn" data-act="import">Import</button><button class="btn danger" data-act="reset">Restore examples</button></div>
+      <div class="table"><table><thead><tr><th></th><th>Name</th><th>Group</th><th>Pattern</th><th>Sizes</th><th class="num">In stock</th><th class="num">Price</th><th></th></tr></thead><tbody>
+      ${products.map((p, i) => `<tr><td><div class="thumb">${S.shirtSvg(p, p.colours[0].hex)}</div></td><td><strong>${esc(p.name)}</strong></td><td>${esc(p.group)}</td><td>${esc(p.pattern)}${p.print ? " + print" : ""}</td><td>${esc(p.chart[0].id)} to ${esc(p.chart[p.chart.length - 1].id)}</td><td class="num">${Object.values(p.stock || {}).reduce((a, b) => a + (Number(b) || 0), 0)}</td><td class="num">${S.money(p.price)}</td><td><button class="btn small" data-act="edit" data-i="${i}">Edit</button></td></tr>`).join("")}
+      </tbody></table></div><div id="io"></div>`;
+  }
+  function editProduct(error) {
+    const d = draft, isNew = editing === -1;
+    view.innerHTML = `<div class="bar"><h2 style="flex:1">${isNew ? "New product" : "Edit " + esc(d.name)}</h2><button class="btn" data-act="cancel">Cancel</button>${isNew ? "" : '<button class="btn danger" data-act="delete">Delete</button>'}<button class="btn primary" data-act="save">Save</button></div>
+      ${error ? `<p class="err">${esc(error)}</p>` : ""}
+      <div class="editor"><div class="fields">
+        <div class="two"><div class="field"><label for="p_name">Name</label><input id="p_name" value="${esc(d.name)}"></div><div class="field"><label for="p_price">Price (Rs)</label><input id="p_price" type="number" min="0" step="10" value="${esc(d.price)}"></div></div>
+        <div class="two"><div class="field"><label for="p_group">Group</label><select id="p_group">${["men", "women", "kids"].map((g) => `<option ${g === d.group ? "selected" : ""}>${g}</option>`).join("")}</select></div>
+          <div class="field"><label for="p_pattern">Fabric pattern</label><select id="p_pattern">${["plain", "stripes", "heather"].map((g) => `<option ${g === d.pattern ? "selected" : ""}>${g}</option>`).join("")}</select></div></div>
+        <div class="field"><label for="p_desc">Description</label><textarea id="p_desc" rows="2">${esc(d.desc || "")}</textarea></div>
+        <div class="field"><span class="l">Colours</span><div class="cols">${S.COLOURS.map((c) => `<label><input type="checkbox" data-col="${esc(c.hex)}" ${d.colours.some((x) => x.hex === c.hex) ? "checked" : ""}><i style="background:${esc(c.hex)}"></i>${esc(c.name)}</label>`).join("")}</div></div>
+        <div class="field"><span class="l">Chest print (optional)</span><div class="bar"><input type="file" id="p_print" accept="image/*" style="max-width:260px">${d.print ? '<button class="btn small" data-act="noprint">Remove print</button>' : ""}</div><p class="hint">A logo or artwork with a transparent background works best. It is shown on the chest in the try-on.</p></div>
+        <div class="field"><span class="l">Size chart and stock</span>
+          <p class="hint">Flat measurements of the finished garment in cm: chest from pit to pit, length from the top of the shoulder to the hem. The try-on draws each size from these numbers, so they must be the real ones.</p>
+          <div class="table chart"><table><thead><tr><th>Size</th><th>Chest</th><th>Length</th><th>Shoulder</th><th>Sleeve</th><th>Stock</th><th></th></tr></thead><tbody>
+          ${d.chart.map((r, i) => `<tr data-row="${i}"><td><input class="id" data-k="id" value="${esc(r.id)}" aria-label="Size name"></td>${["chest", "length", "shoulder", "sleeve"].map((k) => `<td><input type="number" step="0.5" min="1" data-k="${k}" value="${esc(r[k])}" aria-label="${k}"></td>`).join("")}<td><input type="number" step="1" min="0" data-k="stock" value="${esc((d.stock || {})[r.id] ?? 0)}" aria-label="Stock"></td><td><button class="btn small" data-act="delrow" data-i="${i}" aria-label="Remove size">&times;</button></td></tr>`).join("")}
+          </tbody></table></div>
+          <div class="bar"><button class="btn small" data-act="addrow">Add size</button><button class="btn small" data-act="std">Use the standard ${esc(d.group)} chart</button></div></div>
+      </div>
+      <div class="preview"><div class="pic" id="pv">${S.shirtSvg(d, d.colours[0] ? d.colours[0].hex : "#888888")}</div><p class="hint">Drawing shown in the shop. The try-on uses the same colour, pattern and print.</p></div></div>`;
+  }
+  function readDraft() {
+    const d = draft; if (!$("p_name")) return;
+    d.name = $("p_name").value.trim(); d.price = Math.max(0, Number($("p_price").value) || 0); d.group = $("p_group").value; d.pattern = $("p_pattern").value; d.desc = $("p_desc").value.trim();
+    d.colours = S.COLOURS.filter((c) => { const b = document.querySelector(`[data-col="${c.hex}"]`); return b && b.checked; });
+    const stock = {};
+    d.chart = [...document.querySelectorAll("tr[data-row]")].map((tr) => { const g = (k) => tr.querySelector(`[data-k="${k}"]`).value; const r = { id: g("id").trim(), chest: Number(g("chest")), length: Number(g("length")), shoulder: Number(g("shoulder")), sleeve: Number(g("sleeve")) }; if (d.group === "kids") r.kids = true; stock[r.id] = Math.max(0, Math.round(Number(g("stock")) || 0)); return r; });
+    d.stock = stock;
+  }
+  function validate(d) {
+    if (d.name.length < 2) return "Give the product a name.";
+    if (!d.colours.length) return "Choose at least one colour.";
+    if (!d.chart.length) return "Add at least one size.";
+    const ids = new Set();
+    for (const r of d.chart) {
+      if (!r.id) return "Every size needs a name, such as M or 6-7Y.";
+      if (ids.has(r.id)) return `Size ${r.id} appears twice.`; ids.add(r.id);
+      if (!(r.chest >= 20 && r.chest <= 90)) return `Size ${r.id}: chest should be the flat width, between 20 and 90 cm.`;
+      if (!(r.length >= 25 && r.length <= 110)) return `Size ${r.id}: length should be between 25 and 110 cm.`;
+      if (!(r.shoulder >= 18 && r.shoulder <= 70)) return `Size ${r.id}: shoulder should be between 18 and 70 cm.`;
+      if (!(r.sleeve >= 5 && r.sleeve <= 70)) return `Size ${r.id}: sleeve should be between 5 and 70 cm.`;
+    }
+    return "";
+  }
+  async function loadPrint(file) {
+    const bmp = await createImageBitmap(file), k = Math.min(1, 256 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height); return c.toDataURL("image/png");
+  }
+
+  /* ----- orders and settings ----- */
+  function listOrders() {
+    const orders = S.orders();
+    view.innerHTML = `<h2>Orders placed in this browser (${orders.length})</h2><p class="hint">Orders reach the shop when the customer sends them by WhatsApp. This list only shows orders placed on this device.</p>` +
+      (orders.length ? orders.map((o) => `<pre>${esc(`${o.no}  ${new Date(o.at).toLocaleString()}\n${o.lines.map((l) => `${l.qty} x ${l.name} | ${l.colour} | ${l.size}`).join("\n")}\nTotal ${S.money(o.total)} (cash on delivery)\n${o.name}, ${o.phone}\n${o.address}, ${o.city}${o.notes ? "\nNote: " + o.notes : ""}`)}</pre>`).join("") : '<p class="hint">None yet.</p>');
+  }
+  function showSettings(error) {
+    const s = S.settings();
+    view.innerHTML = `<div class="bar"><h2 style="flex:1">Shop settings</h2><button class="btn primary" data-act="savesettings">Save</button></div>${error ? `<p class="err">${esc(error)}</p>` : ""}
+      <div class="editor" style="grid-template-columns:minmax(0,1fr)"><div class="fields">
+        <div class="two"><div class="field"><label for="s_name">Shop name</label><input id="s_name" value="${esc(s.name)}"></div><div class="field"><label for="s_tag">Headline on the first page</label><input id="s_tag" value="${esc(s.tagline)}"></div></div>
+        <div class="field"><label for="s_wa">WhatsApp number that receives orders</label><input id="s_wa" inputmode="tel" placeholder="923001234567" value="${esc(s.whatsapp)}"><p class="hint">Country code first, digits only. With this set, customers get a "Send on WhatsApp" button after placing an order.</p></div>
+        <div class="two"><div class="field"><label for="s_del">Delivery charge (Rs)</label><input id="s_del" type="number" min="0" step="10" value="${esc(s.delivery)}"></div><div class="field"><label for="s_free">Free delivery from (Rs)</label><input id="s_free" type="number" min="0" step="100" value="${esc(s.freeOver)}"></div></div>
+      </div></div>`;
+  }
+
+  /* ----- events ----- */
+  document.querySelector(".tabs").addEventListener("click", (ev) => { const b = ev.target.closest("[data-tab]"); if (!b) return; tab = b.dataset.tab; editing = null; render(); });
+  view.addEventListener("change", async (ev) => {
+    if (editing == null || tab !== "products") return;
+    if (ev.target.id === "p_print" && ev.target.files[0]) { readDraft(); try { draft.print = await loadPrint(ev.target.files[0]); } catch { editProduct("That picture could not be opened. Try a PNG or JPG."); return; } editProduct(); return; }
+    readDraft(); const pv = $("pv"); if (pv) pv.innerHTML = S.shirtSvg(draft, draft.colours[0] ? draft.colours[0].hex : "#888888");
+  });
+  view.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-act]"); if (!b) return; const act = b.dataset.act;
+    if (act === "new") { editing = -1; draft = blank(); render(); }
+    else if (act === "edit") { editing = Number(b.dataset.i); draft = JSON.parse(JSON.stringify(products[editing])); render(); }
+    else if (act === "cancel") { editing = null; render(); }
+    else if (act === "noprint") { readDraft(); draft.print = null; editProduct(); }
+    else if (act === "addrow") { readDraft(); draft.chart.push({ id: "", chest: 50, length: 70, shoulder: 45, sleeve: 20 }); editProduct(); }
+    else if (act === "delrow") { readDraft(); draft.chart.splice(Number(b.dataset.i), 1); editProduct(); }
+    else if (act === "std") { readDraft(); draft.chart = JSON.parse(JSON.stringify(S.CHARTS[draft.group])); draft.stock = Object.fromEntries(draft.chart.map((r) => [r.id, draft.stock[r.id] ?? 5])); editProduct(); }
+    else if (act === "save") {
+      readDraft(); const err = validate(draft); if (err) { editProduct(err); window.scrollTo(0, 0); return; }
+      if (editing === -1) { let id = slug(draft.name), n = 2; while (products.some((p) => p.id === id)) id = slug(draft.name) + "-" + n++; draft.id = id; products.push(draft); } else products[editing] = draft;
+      if (!S.saveProducts(products)) { editProduct("Could not save: this browser's storage is full or blocked. A smaller print picture may help."); return; }
+      editing = null; render(); toast("Saved");
+    }
+    else if (act === "delete") { if (b.dataset.sure) { products.splice(editing, 1); S.saveProducts(products); editing = null; render(); toast("Deleted"); } else { b.dataset.sure = "1"; b.textContent = "Tap again to delete"; } }
+    else if (act === "reset") { if (b.dataset.sure) { S.resetProducts(); products = S.products(); render(); toast("Example products restored"); } else { b.dataset.sure = "1"; b.textContent = "Tap again: replaces all products"; } }
+    else if (act === "export") { $("io").innerHTML = `<p class="hint" style="margin-top:14px">Copy this and keep it as catalog.json. It is the whole catalogue, including size charts and prints.</p><textarea class="json" readonly id="json">${esc(JSON.stringify(products, null, 1))}</textarea><div class="bar" style="margin-top:8px"><button class="btn small" data-act="copyjson">Copy</button></div>`; }
+    else if (act === "copyjson") { const t = $("json"); (navigator.clipboard ? navigator.clipboard.writeText(t.value) : Promise.reject()).then(() => toast("Copied"), () => { t.select(); toast("Selected: copy it"); }); }
+    else if (act === "import") { $("io").innerHTML = `<p class="hint" style="margin-top:14px">Paste a catalogue exported from this page. It replaces the current products.</p><textarea class="json" id="json"></textarea><div class="bar" style="margin-top:8px"><button class="btn small primary" data-act="doimport">Replace products</button></div><p class="err" id="ioerr"></p>`; }
+    else if (act === "doimport") {
+      try { const list = JSON.parse($("json").value); if (!Array.isArray(list) || !list.length) throw new Error("It should be a list of products.");
+        for (const p of list) { const e = validate({ ...p, name: String(p.name || ""), colours: p.colours || [], chart: p.chart || [] }); if (e) throw new Error((p.name || "A product") + ": " + e); if (!p.id) p.id = slug(p.name); }
+        products = list; S.saveProducts(products); render(); toast("Catalogue imported");
+      } catch (e) { $("ioerr").textContent = "Not imported. " + e.message; }
+    }
+    else if (act === "savesettings") {
+      const wa = $("s_wa").value.replace(/\D/g, "");
+      if ($("s_wa").value.trim() && wa.length < 10) { showSettings("The WhatsApp number looks too short. Use the country code and number, digits only."); return; }
+      const name = $("s_name").value.trim() || "Darzi";
+      S.saveSettings({ name, tagline: $("s_tag").value.trim() || "See how it fits before you buy.", whatsapp: wa, delivery: Math.max(0, Number($("s_del").value) || 0), freeOver: Math.max(0, Number($("s_free").value) || 0) });
+      $("title").textContent = name + " Admin"; showSettings(); toast("Settings saved");
+    }
+  });
+  render();
+})();
+</script>
+</body>
+</html>
