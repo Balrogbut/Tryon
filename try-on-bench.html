@@ -163,6 +163,7 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
       <dl class="facts">
         <dt>Garment</dt><dd id="factGarment">--</dd>
         <dt>Body</dt><dd id="factBody">Not measured yet</dd>
+        <dt>Fit</dt><dd id="factFit">Not measured yet</dd>
       </dl>
       <div class="row actions">
         <div class="seg" role="group" aria-label="Drawing mode">
@@ -349,7 +350,8 @@ function bodyMetrics(lm, vw, vh) {
 const EYE_HIP_RATIO = 0.41;    // eye-to-hip-joint distance as a share of standing height; varies a few percent between people
 class Calibrator {
   constructor() { this.reset(); }
-  reset() { this.sh = []; this.to = []; this.rsh = []; this.rto = []; this.shoulderCm = null; this.torsoCm = null; this.exact = false; }
+  reset() { this.sh = []; this.to = []; this.rsh = []; this.rto = []; this.shoulderCm = null; this.torsoCm = null; this.exact = false; this.differs = 0; }
+  get needsFullHeight() { return !this.exact && this.differs >= 12; }
   get locked() { return this.shoulderCm != null; }
   add(m, heightCm) {
     if (!(heightCm > 0)) return;
@@ -358,7 +360,14 @@ class Calibrator {
       push(this.sh, this.to, m.eyeHeelPx / EYE_HEEL_RATIO / heightCm);
       if (this.sh.length >= 12) { this.shoulderCm = quantile(this.sh, 0.75); this.torsoCm = quantile(this.to, 0.5); this.exact = true; }
     } else if (m.upper && !this.exact) {
-      push(this.rsh, this.rto, m.eyeHipPx / EYE_HIP_RATIO / heightCm);
+      // The quick estimate assumes eye-to-hip is 41% of height. That is wrong for some bodies (short limbs with a
+      // full-size trunk, for example). Head size gives a second, independent estimate; if the two disagree, the
+      // quick estimate is not used and the scale waits for the full-height measurement, which assumes no proportions.
+      const quick = m.eyeHipPx / EYE_HIP_RATIO / heightCm, byHead = m.headPx / expectedEyeMouthCm(heightCm);
+      if (m.headOk && Math.abs(quick / byHead - 1) > 0.15) { this.differs++; if (this.needsFullHeight) { this.rsh = []; this.rto = []; this.shoulderCm = this.torsoCm = null; } return; }
+      this.differs = Math.max(0, this.differs - 1);
+      if (this.needsFullHeight) return;
+      push(this.rsh, this.rto, quick);
       if (this.rsh.length >= 12) { this.shoulderCm = quantile(this.rsh, 0.75); this.torsoCm = quantile(this.rto, 0.5); }
     }
   }
@@ -436,13 +445,64 @@ function armhole(spec, body, side) {
   return { top: { x: side * spec.shHalf, y }, pit: { x: side * spec.chHalf, y: Math.max(spec.armhole, y + 10) } };
 }
 
+// ---- Body shape. Nothing here assumes standard proportions: the widths are measured from the wearer's own outline. ----
+// Front-to-back depth cannot be seen from the front, so girth uses an assumed depth-to-width ratio per zone.
+const DEPTH_RATIO = { chest: 0.7, waist: 0.78, hip: 0.75 };
+function girthFromWidth(fullWidth, ratio) {
+  const a = fullWidth / 2, c = a * ratio, h = ((a - c) / (a + c)) ** 2;
+  return Math.PI * (a + c) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));   // ellipse circumference
+}
+// Eye-to-mouth distance for a given height: nearly constant in adults, a little smaller in young children.
+function expectedEyeMouthCm(heightCm) { return heightCm <= 100 ? 5.6 : heightCm >= 160 ? 6.7 : 5.6 + ((heightCm - 100) / 60) * 1.1; }
+
+// Walks outwards from a point inside the body outline until it leaves the outline. Returns the distance in pixels
+// on each side (null where the edge was not found). data is a person mask, 1 inside the body and 0 outside.
+function silhouetteHalfWidths(data, w, h, cx, cy, ux, uy, limit) {
+  const inside = (x, y) => x >= 0 && y >= 0 && x < w && y < h && data[Math.round(y) * w + Math.round(x)] >= 0.5;
+  if (!inside(cx, cy)) return null;
+  const scan = (sgn) => { for (let d = 1; d < limit; d++) { const x = cx + sgn * ux * d, y = cy + sgn * uy * d; if (x < 0 || y < 0 || x >= w || y >= h) return null; if (!inside(x, y)) return d; } return null; };
+  return { pos: scan(1), neg: scan(-1) };
+}
+
+// The wearer's half-width (cm) at a height y on the garment, from measured chest, waist and hip. null above the chest.
+function bodyHalfAt(pr, y) {
+  if (!pr || y < pr.yChest - 4) return null;
+  const pts = [[pr.yChest, pr.chest], [pr.yWaist, pr.waist], [pr.yHip, pr.hip]].filter((q) => q[1] != null);
+  if (!pts.length) return null;
+  if (y <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) if (y <= pts[i][0]) { const k = (y - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]); return pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k; }
+  return pts[pts.length - 1][1];
+}
+function depthRatioAt(pr, y) { return y <= pr.yChest ? DEPTH_RATIO.chest : y >= pr.yHip ? DEPTH_RATIO.hip : DEPTH_RATIO.waist; }
+
+// Zone by zone: does this garment go round this body? spare = garment girth minus body girth, in cm.
+function fitReport(row, pr) {
+  const out = [];
+  for (const [zone, half, flat] of [["chest", pr.chest, row.chest], ["waist", pr.waist, row.chest * 1.02], ["hips", pr.hip, row.chest * 1.04]]) {
+    if (half == null) continue;
+    const spare = 2 * flat - girthFromWidth(2 * half, DEPTH_RATIO[zone === "hips" ? "hip" : zone]);
+    out.push({ zone, spare, verdict: spare < 0 ? "too tight" : spare < 4 ? "snug" : spare <= 22 ? "fits" : "loose" });
+  }
+  return out;
+}
+
 function torsoTube(spec, nr, ny, body) {
   body = body || defaultBody(spec);
-  const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3), uv = new Float32Array(cols * ny * 2);
+  const pr = body.profile || null, fitDefault = body.fitDefault || 0;
+  const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3), uv = new Float32Array(cols * ny * 2), fit = new Float32Array(cols * ny);
   const hemY = spec.length - spec.hemCurve, ta = spec.armhole / spec.length;
   for (let j = 0; j < ny; j++) {
     const t = j / (ny - 1), k = Math.min(1, t / ta), e = k * k * (3 - 2 * k);
-    const hw = (spec.shHalf + (spec.chHalf - spec.shHalf) * e) * (1 + 0.04 * Math.max(0, (t - ta) / (1 - ta)));
+    const hwOwn = (spec.shHalf + (spec.chHalf - spec.shHalf) * e) * (1 + 0.04 * Math.max(0, (t - ta) / (1 - ta)));
+    // Where the wearer is wider than the shirt hangs, the cloth lies on the body and is drawn at the body's width.
+    // strain compares the body's girth with the cloth available at that height: above 0 it pulls, below 0 it hangs loose.
+    const yRow = t * spec.length, bh = bodyHalfAt(pr, yRow);
+    let hw = hwOwn, strain = fitDefault > 0 ? fitDefault * (1 - smooth(0.25, 0.6, t)) : fitDefault;
+    if (bh != null) {
+      const w0 = smooth(pr.yChest - 4, pr.yChest + 2, yRow), flat = (2 * hwOwn) / WORN_WIDTH;
+      hw = hwOwn + Math.max(0, bh + 0.3 - hwOwn) * w0;
+      strain = ((girthFromWidth(2 * bh, depthRatioAt(pr, yRow)) + 4) / (2 * flat) - 1) * w0;
+    }
     const hd = hw * (0.4 + 0.26 * e);                      // flat across the shoulders, rounder at the chest
     for (let i = 0; i < cols; i++) {
       const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi);
@@ -453,11 +513,11 @@ function torsoTube(spec, nr, ny, body) {
       pos[n] = hw * sx; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
       const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fl = Math.hypot(fx, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
       nrm[n] = fx / fl; nrm[n + 1] = 0; nrm[n + 2] = fz / fl;
-      g[n] = sx; g[n + 1] = t; g[n + 2] = 0;
+      g[n] = sx; g[n + 1] = t; g[n + 2] = 0; fit[n / 3] = strain;
       uv[(n / 3) * 2] = phi * hw; uv[(n / 3) * 2 + 1] = pos[n + 1];      // fabric coordinates in cm: around the body, down the body
     }
   }
-  return { pos, nrm, g, uv };
+  return { pos, nrm, g, uv, fit };
 }
 
 // Sleeve as a tube sewn to the armhole. Each ring is set by two points: one on the sleeve's top edge and one on
@@ -571,7 +631,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "14 (true size without the outline step)";
+  const BUILD = "15 (measures waist and hips from the body outline)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
@@ -580,7 +640,7 @@ class OneEuro {
     view: $("view"), video: $("cam"), canvas: $("gl"), pill: $("pill"), pillText: $("pillText"), meter: $("meter"),
     stage: $("stage"), hint: $("hint"), hintText: $("hintText"), tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
     sizes: $("sizes"), swatches: $("swatches"), height: $("height"), height0: $("height0"),
-    factGarment: $("factGarment"), factBody: $("factBody"), modeTrue: $("modeTrue"), modeFit: $("modeFit"),
+    factGarment: $("factGarment"), factBody: $("factBody"), factFit: $("factFit"), modeTrue: $("modeTrue"), modeFit: $("modeFit"),
     probe: $("probe"), start: $("start"), error: $("error"), fov: $("fov"), devices: $("devices"), pDump: $("pDump"),
   };
 
@@ -686,7 +746,7 @@ class OneEuro {
     if (from !== el.height) el.height.value = n;
     if (from !== el.height0) el.height0.value = n;
   }
-  function resetScale() { calib.reset(); ppcSmooth = null; state.ppcVideo = null; el.factBody.textContent = "Not measured yet"; }
+  function resetScale() { calib.reset(); ppcSmooth = null; state.ppcVideo = null; el.factBody.textContent = "Not measured yet"; if (el.factFit) resetShape(); }
 
   /* ----- graphics ----- */
   function makeMaterial() {
@@ -702,8 +762,8 @@ class OneEuro {
         k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
       },
       vertexShader: `
-        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway;
-        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv;
+        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway; attribute float fit;
+        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
         void main() {
           float w = smoothstep(0.0, hipY, position.y);     // 0 at the shoulders, 1 from the hips down
           vec2 Ux = normalize(mix(U, U2, w));               // across the body: shoulder line at the top, hip line at the hem
@@ -711,7 +771,7 @@ class OneEuro {
           float c = cos(yw), s = sin(yw);
           vec3 p = vec3(position.x * c + position.z * s, position.y, -position.x * s + position.z * c);
           vN = vec3(normal.x * c + normal.z * s, normal.y, -normal.x * s + normal.z * c);
-          vG = g; vP = position; vUv = uv;
+          vG = g; vP = position; vUv = uv; vFit = fit;
           float sw = smoothstep(sway.z, sway.w, position.y); sw *= sw;   // free cloth below the underarm swings, most at the hem
           vec2 scr = O + ((p.x + sway.x * sw) * Ux + (p.y + sway.y * sw) * V) * k; vScr = scr;
           gl_Position = projectionMatrix * vec4(scr, p.z * 0.04, 1.0);
@@ -722,7 +782,7 @@ class OneEuro {
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
         uniform float pattern; uniform float loose; uniform float tight; uniform float grain;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
-        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv;
+        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -778,8 +838,9 @@ class OneEuro {
           // Folds: a loose shirt hangs in soft vertical folds below the chest, a tight one pulls across it.
           float below = smoothstep(0.3, 0.95, vG.y);
           float fold = cos(vUv.x * 0.42 + 1.4 * sin(vUv.y * 0.08)) * 0.6 + cos(vUv.x * 0.9 - vUv.y * 0.05 + 2.0) * 0.4;
-          float pull = cos(vUv.y * 1.1 + 0.8 * sin(vUv.x * 0.16)) * (1.0 - smoothstep(0.25, 0.6, vG.y));
-          float relief = isTorso > 0.5 ? (0.035 + 0.11 * loose) * fold * below + 0.09 * tight * pull : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
+          float pull = cos(vUv.y * 1.1 + 0.8 * sin(vUv.x * 0.16));
+          float looseL = smoothstep(0.0, 0.2, -vFit), tightL = smoothstep(0.0, 0.1, vFit);   // per zone: chest, waist and hips can differ
+          float relief = isTorso > 0.5 ? (0.035 + 0.11 * looseL) * fold * below + 0.1 * tightL * pull : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
@@ -800,12 +861,13 @@ class OneEuro {
     geo.setAttribute("normal", new THREE.BufferAttribute(tube.nrm, 3));
     geo.setAttribute("g", new THREE.BufferAttribute(tube.g, 3));
     geo.setAttribute("uv", new THREE.BufferAttribute(tube.uv, 2));
+    geo.setAttribute("fit", new THREE.BufferAttribute(tube.fit || new Float32Array(tube.pos.length / 3), 1));
     geo.setIndex(gridIndex(cols, rows));
     const m = new THREE.Mesh(geo, makeMaterial()); m.frustumCulled = false; m.renderOrder = order; m.visible = false; scene.add(m);
     return m;
   }
   function setTube(meshObj, tube) {
-    for (const [name, arr] of [["position", tube.pos], ["normal", tube.nrm], ["uv", tube.uv]]) { const at = meshObj.geometry.getAttribute(name); at.array.set(arr); at.needsUpdate = true; }
+    for (const [name, arr] of [["position", tube.pos], ["normal", tube.nrm], ["uv", tube.uv], ["fit", tube.fit]].filter((q) => q[1])) { const at = meshObj.geometry.getAttribute(name); at.array.set(arr); at.needsUpdate = true; }
   }
   function setTorso() {
     torsoBody = null; setTube(torso, torsoTube(spec, NR, NY));
@@ -878,7 +940,9 @@ class OneEuro {
     // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
     const lift = neckLift(m, axes.v) * map.s;
     const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
-    if (jHalf + "/" + liftCm !== torsoBody) { torsoBody = jHalf + "/" + liftCm; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
+    body.profile = shapeProfile(liftCm); body.fitDefault = Math.round((1 / state.ease - 1) * 40) / 40;
+    const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + (body.profile ? [body.profile.chest, body.profile.waist, body.profile.hip, body.profile.yWaist].map((x) => (x == null ? "-" : Math.round(x * 2))).join(",") : "");
+    if (bodyKey !== torsoBody) { torsoBody = bodyKey; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
     const O = sub(ms.sMid, mul(axes.v, lift));
     const hipY = m.hipsOk ? (m.torsoPx * map.s + lift) / ppcScreen : 1e4;
     const clamp = (x, a) => Math.max(-a, Math.min(a, x));
@@ -954,6 +1018,68 @@ class OneEuro {
     } catch { /* lighting match is optional */ }
   }
 
+  /* ----- body shape: measured from the wearer's own outline, a few times, then left alone ----- */
+  let shaper = null, shaperFailed = false, makeTracker = null, lastShape = 0;
+  const shape = { waist: [], hip: [], tries: 0 };
+  state.shape = shape;
+  function resetShape() { shape.waist = []; shape.hip = []; shape.tries = 0; el.factFit.textContent = "Not measured yet"; }
+  const median = (a) => (a.length ? quantile(a, 0.5) : null);
+  // Body widths as half-widths in cm, placed at heights on the garment. Chest comes from the shoulder points,
+  // waist and hips from the outline. Returns null until the scale is known.
+  function shapeProfile(liftCm) {
+    if (state.mode !== "true" || !calib.locked) return null;
+    const torso = calib.torsoCm, lift = liftCm == null ? LIFT * calib.shoulderCm : liftCm;
+    return { yChest: lift + 0.25 * torso, yWaist: lift + 0.68 * torso, yHip: lift + 1.05 * torso,
+      chest: (calib.shoulderCm * 0.98) / 2, waist: shape.waist.length >= 3 ? median(shape.waist) : null, hip: shape.hip.length >= 3 ? median(shape.hip) : null };
+  }
+  // Reads the body outline at waist and hip level. Runs only while facing the camera, at most ~twice a second,
+  // and stops once it has enough readings, because each reading briefly pauses the tracking.
+  async function sampleShape(lm, world, m, now) {
+    if (shaperFailed || !makeTracker || now - lastShape < 600 || shape.tries > 60) return;
+    if (shape.waist.length >= 8 && shape.hip.length >= 8) return;
+    if (!state.forceShape && (!calib.locked || !m.upper || Math.abs(state.yaw || 0) > 0.3)) return;
+    lastShape = now; shape.tries++;
+    try {
+      if (!shaper) { shaper = "loading"; shaper = await makeTracker(true); return; }
+      if (shaper === "loading") return;
+      const v = el.video, res = shaper.detectForVideo(v, now), mask = res.segmentationMasks && res.segmentationMasks[0];
+      if (!mask) return;
+      const data = mask.getAsFloat32Array(), w = mask.width, h = mask.height, kx = w / v.videoWidth, ky = h / v.videoHeight;
+      const P = (i) => ({ x: lm[i].x * v.videoWidth, y: lm[i].y * v.videoHeight });
+      const vAx = norm(sub(m.hMid, m.sMid)); let uAx = { x: -vAx.y, y: vAx.x };
+      const ppc = calib.ppc(m) || 1, armR = 5.5 * (effectiveShoulderPx(m) / 36);
+      const read = (tPos, list) => {
+        const c = add(m.sMid, mul(sub(m.hMid, m.sMid), tPos));
+        const hw = silhouetteHalfWidths(data, w, h, c.x * kx, c.y * ky, uAx.x * kx, uAx.y * ky, Math.round(1.6 * m.torsoPx));
+        if (!hw) return;
+        const ok = [];
+        for (const [sgn, d, sh, el2, wr] of [[1, hw.pos, LM.SH_L, LM.EL_L, LM.WR_L], [-1, hw.neg, LM.SH_R, LM.EL_R, LM.WR_R], [1, hw.pos, LM.SH_R, LM.EL_R, LM.WR_R], [-1, hw.neg, LM.SH_L, LM.EL_L, LM.WR_L]]) {
+          if (d == null) continue;
+          // An arm resting against the body would be counted as body. Find where this arm crosses this height;
+          // if it is on this side and touches the edge that was found, the reading on this side is thrown away.
+          let touching = false;
+          for (const [a, b] of [[P(sh), P(el2)], [P(el2), P(wr)]]) {
+            const ya = dot(sub(a, c), vAx), yb = dot(sub(b, c), vAx);
+            if ((ya <= 0 && yb >= 0) || (ya >= 0 && yb <= 0)) { const k = ya === yb ? 0 : ya / (ya - yb), lat = dot(sub(add(a, mul(sub(b, a), k)), c), uAx) * sgn; if (lat > 0 && lat - armR <= d / kx + 3) touching = true; }
+          }
+          ok.push(touching ? null : d / kx);
+        }
+        const sides = [ok[0] != null && ok[2] != null ? ok[0] : null, ok[1] != null && ok[3] != null ? ok[1] : null].filter((x) => x != null);
+        if (sides.length) { list.push(sides.reduce((p, q) => p + q, 0) / sides.length / ppc); if (list.length > 12) list.shift(); }
+      };
+      read(0.68, shape.waist); read(1.05, shape.hip);
+      shape.last = { w, h, waist: shape.waist.length, hip: shape.hip.length };
+      if (mask.close) mask.close();
+    } catch (e) { console.error(e); shaperFailed = true; }
+  }
+  function fitText() {
+    if (state.mode !== "true" || !calib.locked) return "Shown when the scale is set";
+    const row = SIZE_CHART.find((r) => r.id === state.sizeId), pr = shapeProfile(null), rep = fitReport(row, pr);
+    const parts = rep.map((z) => z.zone + " " + z.verdict + (z.verdict === "too tight" ? " (" + fmt(-z.spare, 0) + " cm short)" : ""));
+    const missing = pr.waist == null || pr.hip == null;
+    return parts.join(", ") + (missing ? ". Waist and hips not measured yet: face the camera with arms held slightly away from the body." : ". Measured over current clothing; depth is assumed.");
+  }
+
   /* ----- scale hint: one quiet line, no overlay ----- */
   let hintKey = "", lockState = "";
   function updateGuide(m) {
@@ -961,7 +1087,8 @@ class OneEuro {
     if (now !== lockState) { lockState = now; if (now && navigator.vibrate) navigator.vibrate(now === "exact" ? [40, 60, 40] : 40); }
     let text = "";
     if (state.running && state.mode === "true" && !calib.exact) {
-      if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
+      if (calib.needsFullHeight) text = "The quick estimate is not reliable for this wearer. Step back once so head and feet show.";
+      else if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
       else if (m && (m.upper || m.upright)) text = "Measuring. Hold still for a moment.";
       else if (m) text = "Face the camera with head and hips in view.";
     }
@@ -1023,12 +1150,14 @@ class OneEuro {
     const [three, vision] = await Promise.all([import(THREE_URL), import(VISION_URL)]);
     THREE = three;
     const files = await vision.FilesetResolver.forVisionTasks(VISION_WASM);
-    const make = (delegate) => vision.PoseLandmarker.createFromOptions(files, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate }, runningMode: "VIDEO", numPoses: 1,
+    const make = (delegate, masks) => vision.PoseLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate }, runningMode: "VIDEO", numPoses: 1, outputSegmentationMasks: !!masks,
       minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
     });
+    let delegate = "GPU";
     try { landmarker = await make("GPU"); state.delegate = "graphics chip (GPU)"; }
-    catch { landmarker = await make("CPU"); state.delegate = "processor (CPU)"; }
+    catch { delegate = "CPU"; landmarker = await make("CPU"); state.delegate = "processor (CPU)"; }
+    makeTracker = (masks) => make(delegate, masks);   // a second tracker that also returns the body outline, made on first use
     initGraphics(); selectFabric(state.fabric);
   }
 
@@ -1051,6 +1180,7 @@ class OneEuro {
       if (state._lastTick) state.fps += 0.15 * (1000 / Math.max(1, t0 - state._lastTick) - state.fps);
       state._lastTick = t0;
       onPose(res, t0);
+      if (pose.target) sampleShape(pose.target, pose.world, bodyMetrics(pose.target, v.videoWidth, v.videoHeight), t0);
     }
     schedule();
   }
@@ -1152,7 +1282,11 @@ class OneEuro {
     const d = distanceNow();
     el.meter.textContent = `${fmt(state.fps, 0)} fps` + (d ? `\n${fmt(d, 2)} m` : "");
     el.meter.style.whiteSpace = "pre";
-    if (calib.locked) el.factBody.textContent = `shoulder joints ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm (approximate)`;
+    if (calib.locked) {
+      const pr = shapeProfile(null), wd = (x) => (x == null ? "--" : fmt(2 * x, 0));
+      el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
+    }
+    el.factFit.textContent = fitText();
     if (!el.probe.hidden) renderProbe();
   }
   function probeFacts() {
@@ -1190,6 +1324,7 @@ class OneEuro {
       "Focus value changes: " + p.focusChanges,
       "Distance from height + lens angle: " + p.dist + ` (height ${state.heightCm} cm, lens angle ${state.fovLong} deg)`,
       "Scale: " + p.scale,
+      "Body shape: " + (shaperFailed ? "outline reading failed on this device" : `${shape.waist.length} waist and ${shape.hip.length} hip readings in ${shape.tries} tries`) + "; fit: " + fitText(),
       "Turn: " + fmt(((state.yaw || 0) * 180) / Math.PI, 0) + " deg",
       "Tracking: " + p.speed + ", on " + p.delegate,
       "Settings: " + JSON.stringify(p.settings, null, 1),
