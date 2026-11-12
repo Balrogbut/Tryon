@@ -280,8 +280,8 @@ function garmentSpec(row) {
     length: row.length,
     drop: 0.085 * row.shoulder,
     armhole: 0.31 * row.length,
-    neckHalf: 0.195 * row.shoulder,
-    neckDrop: 0.19 * row.shoulder,
+    neckHalf: 0.175 * row.shoulder,
+    neckDrop: 0.125 * row.shoulder,
     sleeve: row.sleeve,
     sleeveOpen: 0.33 * row.chest * TUBE,
     hemCurve: 0.02 * row.length,
@@ -499,7 +499,7 @@ function occluders(lm, world, vw, vh, m, sleevePx) {
   const earMid = mid(P(LM.EAR_L), P(LM.EAR_R));
   const up = norm(sub(earMid, m.sMid));
   const neckBase = add(m.sMid, mul(up, 4 * u)), crown = add(earMid, mul(up, 5 * u));
-  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 5.8 * u, 6.6 * u, 1, 0]);
+  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 5.2 * u, 5.6 * u, 1, 0]);
   out.push([earMid.x, earMid.y, crown.x, crown.y, 10 * u, 10 * u, 1, 0]);
   if (!world) return out;
   const torsoZ = (world[LM.SH_L].z + world[LM.SH_R].z + world[LM.HIP_L].z + world[LM.HIP_R].z) / 4;
@@ -561,7 +561,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "9 (shoulders shaped to the wearer)";
+  const BUILD = "10 (picture in step with the shirt, crew collar, dimmer lighting)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
@@ -594,7 +594,7 @@ class OneEuro {
   let printTex = null;
   let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5]);
   const calib = new Calibrator();
-  const filters = Array.from({ length: 33 }, () => [new OneEuro(), new OneEuro()]);
+  const filters = Array.from({ length: 33 }, () => [new OneEuro(1.5, 25), new OneEuro(1.5, 25)]);
   let ppcSmooth = null, lastVideoTime = -1, lastUi = 0, showJoints = false;
 
   /* ----- small UI helpers ----- */
@@ -686,7 +686,7 @@ class OneEuro {
         fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
         capA: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, capB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, isTorso: { value: 0 },
         lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(1, 1, 1) },
-        pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
+        grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
         k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
@@ -710,7 +710,7 @@ class OneEuro {
         precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
-        uniform float pattern; uniform float loose; uniform float tight;
+        uniform float pattern; uniform float loose; uniform float tight; uniform float grain;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -751,9 +751,11 @@ class OneEuro {
 
           if (vG.z < 0.5) {
             float drop = vP.z > 0.0 ? neck.y : neck.z;      // deep at the front, shallow at the back
-            float e = (vP.x * vP.x) / (neck.x * neck.x) + (vP.y * vP.y) / (drop * drop);
+            vec2 q0 = vec2(abs(vP.x), max(vP.y, 0.0));          // crew neck: flatter at the bottom than a circle
+            float e = pow(q0.x / neck.x, 2.6) + pow(q0.y / drop, 2.6);
             if (e < 1.0) discard;                           // neck opening
-            if (e < 1.3 && !inside) {                       // collar rib, in the base colour
+            float e2 = pow(q0.x / (neck.x + 2.0), 2.6) + pow(q0.y / (drop + 2.0), 2.6);
+            if (e2 < 1.0 && !inside) {                      // 2 cm rib                       // collar rib, in the base colour
               float rib = 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
               gl_FragColor = vec4(fabric * lightCol * 0.8 * rib * (0.55 + 0.45 * n.z), aOut); return;
             }
@@ -771,7 +773,9 @@ class OneEuro {
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
-          float shade = inside ? 0.42 : 0.5 + 0.58 * diff;
+          float shade = inside ? 0.34 : 0.4 + 0.56 * diff;
+          col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 0.86);          // a camera never shows cloth at full saturation
+          col += (hash(gl_FragCoord.xy + grain) - 0.5) * 0.035;                      // sensor grain, so it sits in the picture
           shade *= 1.0 - 0.07 * vG.y;
           if (!inside) shade *= 1.0 + relief;
           if (vG.y > 0.955 && vG.y < 0.972) shade *= 0.9;   // stitch line above the hem and sleeve ends
@@ -795,7 +799,7 @@ class OneEuro {
   }
   function setTorso() {
     torsoBody = null; setTube(torso, torsoTube(spec, NR, NY));
-    torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 0.22 * spec.neckDrop);
+    torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 1.5);
     applyPrint();
   }
   function initGraphics() {
@@ -813,6 +817,18 @@ class OneEuro {
     jg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(33 * 3), 3));
     joints = new THREE.Points(jg, new THREE.PointsMaterial({ color: 0xf2c230, size: 7, sizeAttenuation: false, depthTest: false }));
     joints.frustumCulled = false; joints.renderOrder = 2; joints.visible = false; scene.add(joints);
+    // The camera picture is drawn here too, and refreshed at the same instant the tracker reads it,
+    // so the shirt is always drawn over the exact picture it was measured from.
+    try {
+      videoTex = new THREE.Texture(el.video); videoTex.isVideoTexture = true; videoTex.update = () => {};   // uploaded as a video frame, but only when grabPicture says so
+      videoTex.minFilter = videoTex.magFilter = THREE.LinearFilter; videoTex.generateMipmaps = false; videoTex.colorSpace = THREE.SRGBColorSpace;
+      const bg = new THREE.BufferGeometry();
+      bg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(12), 3));
+      bg.setAttribute("uv", new THREE.BufferAttribute(new Float32Array([0, 1, 1, 1, 0, 0, 1, 0]), 2));
+      bg.setIndex([0, 2, 1, 1, 2, 3]);
+      backdrop = new THREE.Mesh(bg, new THREE.MeshBasicMaterial({ map: videoTex, depthTest: false, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      backdrop.frustumCulled = false; backdrop.renderOrder = -10; backdrop.visible = false; scene.add(backdrop);
+    } catch (e) { console.error(e); videoTex = backdrop = null; }
     resize();
   }
 
@@ -832,7 +848,17 @@ class OneEuro {
     meshObj.visible = true;
   }
   // Secondary motion: the hem and the sleeve ends trail the body and swing back, as hanging cloth does.
-  let torsoBody = null;
+  let torsoBody = null, videoTex = null, backdrop = null;
+  function placeBackdrop(map, vw, vh) {
+    if (!backdrop) return;
+    const a = backdrop.geometry.getAttribute("position"), x0 = map.ox, y0 = map.oy, x1 = map.ox + vw * map.s, y1 = map.oy + vh * map.s;
+    a.array.set([x0, y0, -5, x1, y0, -5, x0, y1, -5, x1, y1, -5]); a.needsUpdate = true;
+  }
+  state.backdropInfo = () => ({ made: !!backdrop, shown: !!(backdrop && backdrop.visible), tex: !!videoTex, pos: backdrop ? Array.from(backdrop.geometry.getAttribute("position").array).map(Math.round).join(",") : "" });
+  function grabPicture() {
+    if (!videoTex || !renderer) return;
+    try { videoTex.needsUpdate = true; renderer.initTexture(videoTex); backdrop.visible = true; } catch (e) { console.error(e); backdrop.visible = false; videoTex = null; }
+  }
   const swing = { p: null, vx: 0, vy: 0, yaw: null, yawV: 0, arm: [null, null], armV: [0, 0] };
   function resetSwing() { swing.p = null; swing.yaw = null; swing.arm = [null, null]; swing.vx = swing.vy = swing.yawV = 0; swing.armV = [0, 0]; }
   function drawGarment(m, map, ppcScreen, ghost, yaw, yawHipIn, occ, dt) {
@@ -883,6 +909,7 @@ class OneEuro {
         A[i].set(c[0] * map.s + map.ox, c[1] * map.s + map.oy, c[2] * map.s + map.ox, c[3] * map.s + map.oy);
         B[i].set(c[4] * map.s, c[5] * map.s, c[6], c[7]);
       }
+      mt.uniforms.grain.value = (performance.now() % 1000) * 0.37;
       mt.uniforms.lightDir.value.set(light.x, -0.5, 0.75); mt.uniforms.lightCol.value.set(light.r, light.g, light.b);
     }
   }
@@ -897,17 +924,20 @@ class OneEuro {
     try {
       lightCtx.drawImage(el.video, 0, 0, 24, 24);
       const d = lightCtx.getImageData(0, 0, 24, 24).data;
-      let r = 0, g = 0, b = 0, lumL = 0, lumR = 0;
+      let r = 0, g = 0, b = 0, lumL = 0, lumR = 0; const lums = new Float32Array(d.length / 4);
       for (let i = 0; i < d.length; i += 4) {
         r += d[i]; g += d[i + 1]; b += d[i + 2];
         const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
         if ((i / 4) % 24 < 12) lumL += l; else lumR += l;
+        lums[i / 4] = l;
       }
       const n = (d.length / 4) * 255; r /= n; g /= n; b /= n;
       const luma = Math.max(0.05, 0.299 * r + 0.587 * g + 0.114 * b);
       const clamp = (v, a, z) => Math.min(z, Math.max(a, v));
-      const expo = clamp(0.5 + 1.0 * luma, 0.55, 1.2);
-      const tint = (c) => expo * (0.5 + 0.5 * clamp(c / luma, 0.8, 1.2));
+      lums.sort(); const p95 = lums[Math.floor(lums.length * 0.95)] / 255;
+      // Brightness of the shirt: follows the picture's average, and never brighter than the brightest things in it.
+      const expo = Math.min(clamp(0.3 + 0.8 * luma, 0.35, 0.95), p95 + 0.05);
+      const tint = (c) => expo * (0.35 + 0.65 * clamp(c / luma, 0.75, 1.25));
       const x = clamp(((lumR - lumL) / Math.max(1, lumR + lumL)) * 3, -0.7, 0.7);
       const k = 0.25;
       light.r += k * (tint(r) - light.r); light.g += k * (tint(g) - light.g); light.b += k * (tint(b) - light.b); light.x += k * (x - light.x);
@@ -1005,6 +1035,7 @@ class OneEuro {
       lastVideoTime = v.currentTime;
       const t0 = performance.now();
       let res = null;
+      grabPicture();
       try { res = landmarker.detectForVideo(v, t0); } catch (e) { console.error(e); }
       const t1 = performance.now();
       state.inferMs += 0.15 * (t1 - t0 - state.inferMs);
@@ -1050,12 +1081,13 @@ class OneEuro {
     const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000)); lastFrame = now;
     state.drawFps += 0.1 * (1 / dt - state.drawFps);
     const W = el.view.clientWidth, H = el.view.clientHeight, map = coverMap(vw, vh, W, H);
+    placeBackdrop(map, vw, vh);
     if (!pose.target) {
       state.metrics = null; pose.lm = null; pose.ppc = null; hideGarment(); joints.visible = false; resetSwing();
       if (now - state.lastSeen > 400) { setPill("warn", "No one in view"); el.tape.hidden = true; }
       updateGuide(null, now); renderer.render(scene, camera); updateUi(now); return;
     }
-    const k = 1 - Math.exp(-dt * 26), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    const k = backdrop && backdrop.visible ? 1 : 1 - Math.exp(-dt * 26), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
     if (!pose.lm) { pose.lm = pose.target.map((p) => ({ ...p })); pose.yaw = state.yaw || 0; pose.yawHip = state.yawHip == null ? pose.yaw : state.yawHip; }
     else {
       pose.target.forEach((p, i) => { const q = pose.lm[i]; q.x += k * (p.x - q.x); q.y += k * (p.y - q.y); q.visibility = p.visibility; });
