@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Try-On Bench</title>
+<style>
+/* Layout: full-bleed camera stage; status strip on top, control sheet at the bottom, both translucent. */
+:root {
+  --ink: #10141b;
+  --ink-2: #1b222c;
+  --line: #303a48;
+  --chalk: #f1ede4;
+  --muted: #9ba6b4;
+  --tape: #f2c230;
+  --tape-ink: #1d1803;
+  --ok: #5ccb90;
+  --warn: #f0a04b;
+  --bad: #f07a6c;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --data: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --gutter-l: max(14px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(14px, env(safe-area-inset-right, 0px));
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: #000; color: var(--chalk); font: 15px/1.4 var(--ui); overflow: hidden; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--tape); outline-offset: 2px; }
+
+.stage { position: fixed; inset: 0; background: #000; }
+.view { position: absolute; inset: 0; }
+.view.mirror { transform: scaleX(-1); }
+.view video, .view canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.view video { object-fit: cover; background: #05070a; }
+
+.top {
+  position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) var(--gutter-r) 10px var(--gutter-l);
+  pointer-events: none;
+}
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 12px; border-radius: 999px;
+  background: rgba(16, 20, 27, .78); border: 1px solid var(--line); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.pill .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.pill[data-state="ok"] .dot { background: var(--ok); }
+.pill[data-state="warn"] .dot { background: var(--warn); }
+.pill[data-state="bad"] .dot { background: var(--bad); }
+.pill span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter {
+  flex: none; padding: 7px 10px; border-radius: 8px; background: rgba(16, 20, 27, .78); border: 1px solid var(--line);
+  font: 12px/1.2 var(--data); font-variant-numeric: tabular-nums; color: var(--muted); text-align: right;
+}
+
+/* Tailor's tape: a live 10 cm bar at the wearer's distance. */
+.tape { position: absolute; left: var(--gutter-l); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; font: 11px/1 var(--data); color: var(--chalk); }
+.tape span { padding: 3px 6px; border-radius: 4px; background: rgba(16, 20, 27, .78); }
+.tape-bar {
+  height: 12px; width: 80px; border: 1px solid var(--tape-ink); border-radius: 2px; background-color: var(--tape);
+  background-image: repeating-linear-gradient(90deg, var(--tape-ink) 0 1px, transparent 1px 10%);
+}
+
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 10px var(--gutter-r) calc(12px + env(safe-area-inset-bottom, 0px)) var(--gutter-l);
+  background: linear-gradient(180deg, rgba(16, 20, 27, 0) 0, rgba(16, 20, 27, .86) 26px, rgba(16, 20, 27, .94) 100%);
+}
+.sheet-toggle { align-self: center; padding: 4px 14px; border: 1px solid var(--line); border-radius: 999px; background: rgba(16, 20, 27, .8); font-size: 12px; color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.sizes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--gutter-l)) calc(-1 * var(--gutter-r)); padding-inline: var(--gutter-l) var(--gutter-r); }
+.sizes::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; min-width: 46px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--ink-2);
+  font: 600 14px/1 var(--ui); font-variant-numeric: tabular-nums;
+}
+.chip[aria-checked="true"] { background: var(--tape); border-color: var(--tape); color: var(--tape-ink); }
+.sizes .sep { flex: none; width: 1px; height: 22px; background: var(--line); }
+.swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
+.swatch[aria-checked="true"] { border-color: var(--chalk); box-shadow: 0 0 0 2px var(--ink), 0 0 0 4px var(--tape); }
+.height { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.height input, .field input { width: 68px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--ink-2); font: 600 15px/1 var(--data); text-align: right; }
+.facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font: 12px/1.35 var(--data); font-variant-numeric: tabular-nums; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.actions { flex-wrap: nowrap; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+.seg button { padding: 9px 11px; border: 0; background: var(--ink-2); font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--chalk); color: var(--ink); font-weight: 600; }
+.btn { flex: 1 1 0; min-width: 0; padding: 9px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--ink-2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.primary { background: var(--tape); border-color: var(--tape); color: var(--tape-ink); font-weight: 700; }
+
+.panel {
+  position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) var(--gutter-r) calc(18px + env(safe-area-inset-bottom, 0px)) var(--gutter-l);
+  background: rgba(16, 20, 27, .96);
+}
+.panel h1 { margin: 0; font: 700 24px/1.15 var(--ui); letter-spacing: -.01em; text-wrap: balance; }
+.panel h2 { margin: 6px 0 0; font: 600 12px/1.2 var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.panel p { margin: 0; max-width: 60ch; color: var(--chalk); }
+.panel p.quiet { color: var(--muted); font-size: 13px; }
+.panel ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 60ch; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field label { color: var(--muted); }
+.readout { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 6px 12px; font: 13px/1.35 var(--data); font-variant-numeric: tabular-nums; }
+.readout dt { color: var(--muted); }
+.readout dd { margin: 0; overflow-wrap: anywhere; }
+.readout dd.hot { color: var(--tape); }
+pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--ink-2); font: 11.5px/1.45 var(--data); overflow-x: auto; white-space: pre; user-select: text; -webkit-user-select: text; }
+.devices { display: grid; gap: 6px; }
+.devices .btn { flex: none; text-align: left; }
+.error { position: absolute; left: var(--gutter-l); right: var(--gutter-r); top: calc(60px + env(safe-area-inset-top, 0px)); padding: 12px 14px; border-radius: 10px; border: 1px solid var(--bad); background: rgba(40, 16, 14, .95); }
+@media (prefers-reduced-motion: no-preference) { .tape-bar { transition: width .12s linear; } }
+/* Phone held sideways: the controls move to a column on the right so the wearer stays visible. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .sheet { left: auto; top: 0; width: min(46%, 400px); justify-content: flex-end; overflow-y: auto; background: rgba(16, 20, 27, .9); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-left: 14px; }
+  .sizes { margin-inline: 0; padding-inline: 0; }
+  .top { right: min(46%, 400px); }
+  .actions { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="view" id="view">
+    <video id="cam" playsinline muted autoplay></video>
+    <canvas id="gl"></canvas>
+  </div>
+
+  <header class="top">
+    <div class="pill" id="pill" data-state="idle"><span class="dot"></span><span id="pillText">Camera off</span></div>
+    <div class="meter" id="meter">-- fps</div>
+  </header>
+
+  <div class="tape" id="tape" hidden><div class="tape-bar" id="tapeBar"></div><span>10 cm at the wearer</span></div>
+
+  <section class="sheet" id="sheet" aria-label="Garment controls">
+    <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true">Hide controls</button>
+    <div id="sheetBody" style="display:contents">
+      <div class="row sizes" id="sizes" role="radiogroup" aria-label="T-shirt size"></div>
+      <div class="row">
+        <div class="row" id="swatches" role="radiogroup" aria-label="Fabric colour"></div>
+        <label class="height" for="height">Wearer height
+          <input id="height" type="number" inputmode="numeric" min="60" max="220" step="1" value="170"> cm
+        </label>
+      </div>
+      <dl class="facts">
+        <dt>Garment</dt><dd id="factGarment">--</dd>
+        <dt>Body</dt><dd id="factBody">Not measured yet</dd>
+      </dl>
+      <div class="row actions">
+        <div class="seg" role="group" aria-label="Drawing mode">
+          <button id="modeTrue" type="button" aria-pressed="true">True size</button>
+          <button id="modeFit" type="button" aria-pressed="false">Fit to body</button>
+        </div>
+        <button class="btn" id="flip" type="button">Flip camera</button>
+        <button class="btn" id="openProbe" type="button">Camera data</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="probe" hidden aria-label="Camera data">
+    <div class="panel-head">
+      <h1>Camera data</h1>
+      <button class="btn" id="closeProbe" type="button" style="flex:none">Close</button>
+    </div>
+    <p class="quiet">Stand a measured distance from the phone and compare the two distance rows below with your tape measure. Then copy the readout and paste it back into the chat.</p>
+    <h2>Live</h2>
+    <dl class="readout">
+      <dt>Focus distance from camera</dt><dd id="pFocus" class="hot">--</dd>
+      <dt>Focus mode</dt><dd id="pFocusMode">--</dd>
+      <dt>Focus value changes seen</dt><dd id="pFocusChanges">0</dd>
+      <dt>Distance from height + lens angle</dt><dd id="pDist" class="hot">--</dd>
+      <dt>Scale</dt><dd id="pScale">--</dd>
+      <dt>Video</dt><dd id="pVideo">--</dd>
+      <dt>Tracking speed</dt><dd id="pSpeed">--</dd>
+      <dt>Tracker runs on</dt><dd id="pDelegate">--</dd>
+    </dl>
+    <div class="field">
+      <label for="fov">Lens angle along the long side of the picture</label>
+      <input id="fov" type="number" inputmode="decimal" min="30" max="120" step="0.5" value="67"> <span>degrees</span>
+    </div>
+    <p class="quiet">67 degrees is calculated from the Galaxy A16 main camera's published sensor size and 26 mm equivalent lens. If the height-based distance is off by the same percentage at every distance, this number is what to adjust.</p>
+    <div class="row">
+      <button class="btn primary" id="copyProbe" type="button">Copy readout</button>
+      <button class="btn" id="resetScale" type="button">Reset scale</button>
+    </div>
+    <h2>Cameras on this device</h2>
+    <div class="devices" id="devices"></div>
+    <h2>Everything the browser reports</h2>
+    <pre class="dump" id="pDump" tabindex="0">Camera not started.</pre>
+  </section>
+
+  <section class="panel" id="start" aria-label="Start">
+    <h1>Try-On Bench</h1>
+    <p>A test of live body tracking and true-to-scale garment drawing on this phone. It draws an example T-shirt at its real measurements, so a size that is too small looks too small.</p>
+    <ol>
+      <li>Enter the wearer's height.</li>
+      <li>Prop the phone up, or have someone hold it, so the wearer's head and feet are both in the picture.</li>
+      <li>Once the scale is set, step closer if you like and try the sizes.</li>
+    </ol>
+    <div class="field">
+      <label for="height0">Wearer height</label>
+      <input id="height0" type="number" inputmode="numeric" min="60" max="220" step="1" value="170"> <span>cm</span>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="startRear" type="button">Start with rear camera</button>
+      <button class="btn" id="startFront" type="button">Start with front camera</button>
+    </div>
+    <p class="quiet" id="startNote">The video is processed on this device. Nothing is uploaded or saved. The first start downloads about 20 MB of tracking software.</p>
+  </section>
+
+  <div class="error" id="error" role="alert" hidden></div>
+</div>
+
+<script>
+/* ---------- Pure maths. No DOM, no libraries. Unit-tested in Node. ---------- */
+/*<pure>*/
+// Example T-shirt chart, flat measurements in cm. chest = pit to pit, length = high shoulder point to hem.
+const SIZE_CHART = [
+  { id: "4-5Y", kids: true, chest: 33, length: 44, shoulder: 27, sleeve: 11.5 },
+  { id: "6-7Y", kids: true, chest: 36, length: 49, shoulder: 29.5, sleeve: 13 },
+  { id: "8-9Y", kids: true, chest: 39, length: 54, shoulder: 32, sleeve: 14.5 },
+  { id: "10-11Y", kids: true, chest: 42, length: 58, shoulder: 34.5, sleeve: 16 },
+  { id: "S", chest: 48, length: 68, shoulder: 43, sleeve: 20 },
+  { id: "M", chest: 52, length: 71, shoulder: 45.5, sleeve: 21 },
+  { id: "L", chest: 56, length: 74, shoulder: 48, sleeve: 22 },
+  { id: "XL", chest: 60, length: 77, shoulder: 50.5, sleeve: 23 },
+];
+
+// Pose landmark numbers used here (MediaPipe's 33-point body model).
+const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 23, HIP_R: 24, KNEE_L: 25, KNEE_R: 26, HEEL_L: 29, HEEL_R: 30 };
+
+// Assumptions, all approximate and all worth replacing with measured values later.
+const EYE_HEEL_RATIO = 0.92;   // eye-to-heel distance as a share of standing height
+const WORN_WIDTH = 0.75;       // a flat width W wraps a body as a tube of girth 2W, which looks about 0.75 W wide from the front
+const TUBE = 2 / Math.PI;      // a sleeve opening of flat width W is a tube about 0.64 W across
+const SEAM_OVER_JOINTS = 1.28; // shoulder seam width of a well-fitting tee relative to the tracked shoulder-joint distance
+
+function garmentSpec(row) {
+  return {
+    id: row.id,
+    shHalf: row.shoulder / 2,
+    chHalf: (row.chest * WORN_WIDTH) / 2,
+    length: row.length,
+    drop: 0.085 * row.shoulder,
+    armhole: 0.31 * row.length,
+    neckHalf: 0.195 * row.shoulder,
+    neckDrop: 0.19 * row.shoulder,
+    sleeve: row.sleeve,
+    sleeveOpen: 0.33 * row.chest * TUBE,
+    hemCurve: 0.02 * row.length,
+  };
+}
+
+function quantile(values, q) {
+  const a = Array.from(values).sort((x, y) => x - y);
+  if (!a.length) return NaN;
+  const p = (a.length - 1) * q, lo = Math.floor(p), hi = Math.ceil(p);
+  return a[lo] + (a[hi] - a[lo]) * (p - lo);
+}
+
+// How a video of vw x vh is placed in a W x H box by object-fit: cover.
+function coverMap(vw, vh, W, H) {
+  const s = Math.max(W / vw, H / vh);
+  return { s, ox: (W - vw * s) / 2, oy: (H - vh * s) / 2 };
+}
+
+// Pinhole camera: focal length in pixels from the lens angle along the picture's long side.
+function focalPx(vw, vh, fovLongDeg) {
+  return Math.max(vw, vh) / 2 / Math.tan((fovLongDeg * Math.PI) / 360);
+}
+// Distance to something whose scale in the picture is ppc pixels per centimetre.
+function distanceM(fpx, ppc) { return fpx / ppc / 100; }
+
+const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+const mul = (a, k) => ({ x: a.x * k, y: a.y * k });
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+const len = (a) => Math.hypot(a.x, a.y);
+const norm = (a) => { const l = len(a) || 1; return { x: a.x / l, y: a.y / l }; };
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+// Body measurements in video pixels from one set of landmarks.
+function bodyMetrics(lm, vw, vh) {
+  const P = (i) => ({ x: lm[i].x * vw, y: lm[i].y * vh });
+  const vis = (i) => (lm[i].visibility == null ? 1 : lm[i].visibility);
+  const inFrame = (i) => lm[i].y > 0.01 && lm[i].y < 0.99 && lm[i].x > 0 && lm[i].x < 1;
+  const L = P(LM.SH_L), R = P(LM.SH_R);
+  const sMid = mid(L, R), hMid = mid(P(LM.HIP_L), P(LM.HIP_R));
+  const eyeMid = mid(P(LM.EYE_L), P(LM.EYE_R)), heelMid = mid(P(LM.HEEL_L), P(LM.HEEL_R));
+  const shouldersOk = vis(LM.SH_L) > 0.5 && vis(LM.SH_R) > 0.5;
+  const hipsOk = vis(LM.HIP_L) > 0.5 && vis(LM.HIP_R) > 0.5 && inFrame(LM.HIP_L) && inFrame(LM.HIP_R);
+  const fullBody = shouldersOk && hipsOk &&
+    [LM.EYE_L, LM.EYE_R, LM.HEEL_L, LM.HEEL_R].every((i) => vis(i) > 0.6 && inFrame(i));
+  // The height ruler only holds for someone standing straight and facing the camera:
+  // legs unbent (hip to heel nearly as long as hip-knee plus knee-heel) and shoulders not turned away.
+  const legStraight = (hip, knee, heel) => {
+    const a = len(sub(P(knee), P(hip))) + len(sub(P(heel), P(knee)));
+    return a > 0 && len(sub(P(heel), P(hip))) / a > 0.985;
+  };
+  const shoulderPx0 = len(sub(L, R)), torsoPx0 = len(sub(hMid, sMid));
+  const upright = fullBody && legStraight(LM.HIP_L, LM.KNEE_L, LM.HEEL_L) && legStraight(LM.HIP_R, LM.KNEE_R, LM.HEEL_R) &&
+    shoulderPx0 > 0.55 * torsoPx0 && Math.abs(heelMid.x - eyeMid.x) < 0.2 * len(sub(heelMid, eyeMid));
+  return {
+    L, R, sMid, hMid, shouldersOk, hipsOk, fullBody, upright,
+    shoulderPx: len(sub(L, R)),
+    torsoPx: len(sub(hMid, sMid)),
+    eyeHeelPx: len(sub(heelMid, eyeMid)),
+    elbowL: vis(LM.EL_L) > 0.4 ? P(LM.EL_L) : null,
+    elbowR: vis(LM.EL_R) > 0.4 ? P(LM.EL_R) : null,
+  };
+}
+
+// Turns "this person is H cm tall" into a ruler that keeps working after their feet leave the picture.
+// While head and feet are visible, it learns two body lengths in cm. Afterwards the scale is whichever
+// of the two gives the larger pixels-per-cm, because turning or leaning can only make a length look shorter.
+class Calibrator {
+  constructor() { this.reset(); }
+  reset() { this.sh = []; this.to = []; this.shoulderCm = null; this.torsoCm = null; }
+  get locked() { return this.shoulderCm != null; }
+  add(m, heightCm) {
+    if (!m.upright || !(heightCm > 0)) return;
+    const ppc = m.eyeHeelPx / EYE_HEEL_RATIO / heightCm;
+    this.sh.push(m.shoulderPx / ppc); this.to.push(m.torsoPx / ppc);
+    if (this.sh.length > 60) { this.sh.shift(); this.to.shift(); }
+    if (this.sh.length >= 15) { this.shoulderCm = quantile(this.sh, 0.75); this.torsoCm = quantile(this.to, 0.5); }
+  }
+  ppc(m) {
+    if (!this.locked) return null;
+    const a = m.shouldersOk ? m.shoulderPx / this.shoulderCm : 0;
+    const b = m.hipsOk ? m.torsoPx / this.torsoCm : 0;
+    return Math.max(a, b) || null;
+  }
+}
+
+// Shoulder width the garment should be judged against, guarded against the wearer turning sideways.
+function effectiveShoulderPx(m) { return Math.max(m.shoulderPx, m.hipsOk ? 0.72 * m.torsoPx : 0); }
+
+// Garment axes on the body: v runs down the spine, u across it towards the wearer's left shoulder.
+function garmentAxes(m) {
+  let v;
+  if (m.hipsOk) v = norm(sub(m.hMid, m.sMid));
+  else { const a = norm(sub(m.L, m.R)); v = { x: -a.y, y: a.x }; if (v.y < 0) v = mul(v, -1); }
+  let u = { x: -v.y, y: v.x };
+  if (dot(u, sub(m.L, m.R)) < 0) u = mul(u, -1);
+  return { u, v };
+}
+
+// Arm direction expressed in garment axes. side is +1 for the wearer's left arm, -1 for the right.
+function armDir(m, axes, side) {
+  const shoulder = side > 0 ? m.L : m.R, elbow = side > 0 ? m.elbowL : m.elbowR;
+  if (!elbow) return norm({ x: 0.35 * side, y: 0.94 });
+  const d = norm(sub(elbow, shoulder));
+  return norm({ x: dot(d, axes.u), y: dot(d, axes.v) });
+}
+
+// Torso as a tube in garment centimetres: x across, y down, z towards the camera.
+// Origin is the centre of the neckline at the high shoulder point. Returns positions and outward normals.
+function torsoTube(spec, nr, ny) {
+  const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3);
+  const hemY = spec.length - spec.hemCurve, ta = spec.armhole / spec.length;
+  for (let j = 0; j < ny; j++) {
+    const t = j / (ny - 1), k = Math.min(1, t / ta), e = k * k * (3 - 2 * k);
+    const hw = (spec.shHalf + (spec.chHalf - spec.shHalf) * e) * (1 + 0.04 * Math.max(0, (t - ta) / (1 - ta)));
+    const hd = hw * (0.4 + 0.26 * e);                      // flat across the shoulders, rounder at the chest
+    for (let i = 0; i < cols; i++) {
+      const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi);
+      const ax = Math.abs(sx) * spec.shHalf;
+      const yTop = ax <= spec.neckHalf ? 0 : (spec.drop * (ax - spec.neckHalf)) / (spec.shHalf - spec.neckHalf);
+      const yBot = hemY + spec.hemCurve * (1 - sx * sx);
+      const n = (j * cols + i) * 3, nx = sx / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
+      pos[n] = hw * sx; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
+      nrm[n] = nx / nl; nrm[n + 1] = 0; nrm[n + 2] = nz / nl;
+      g[n] = sx; g[n + 1] = t; g[n + 2] = 0;
+    }
+  }
+  return { pos, nrm, g };
+}
+
+// Sleeve as a tapering tube that leaves the armhole along the arm. d is the arm direction in the picture plane,
+// yaw is how far the torso has turned, so the sleeve starts from where the shoulder has moved to.
+function sleeveTube(spec, side, d, yaw, na, nr) {
+  const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3);
+  const bx = side * 0.5 * (spec.shHalf + spec.chHalf) * 0.96, by = 0.5 * (spec.drop + spec.armhole);
+  const B = { x: bx * Math.cos(yaw), y: by, z: -bx * Math.sin(yaw) };
+  const r0 = 0.5 * (spec.armhole - spec.drop) * 0.95, r1 = 0.5 * spec.sleeveOpen;
+  for (let j = 0; j < na; j++) {
+    const a = j / (na - 1), along = (-0.12 + 1.12 * a) * spec.sleeve * 0.92, r = r0 + (r1 - r0) * a;
+    for (let i = 0; i < cols; i++) {
+      const th = (2 * Math.PI * i) / nr, c = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
+      const nx = -d.y * c, ny = d.x * c, nz = sn;
+      pos[n] = B.x + d.x * along + r * nx; pos[n + 1] = B.y + d.y * along + r * ny; pos[n + 2] = B.z + r * nz;
+      nrm[n] = nx; nrm[n + 1] = ny; nrm[n + 2] = nz;
+      g[n] = c; g[n + 1] = a; g[n + 2] = 1;
+    }
+  }
+  return { pos, nrm, g };
+}
+
+function gridIndex(nx, ny) {
+  const idx = [];
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const a = j * nx + i, b = a + 1, c = a + nx, e = c + 1;
+    idx.push(a, c, b, b, c, e);
+  }
+  return idx;
+}
+
+// One Euro filter: steadies a jittery signal without making fast movement lag.
+class OneEuro {
+  constructor(minCutoff = 1.7, beta = 0.3, dCutoff = 1) { this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff; this.x = null; this.dx = 0; this.t = null; }
+  static alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  filter(x, t) {
+    if (this.x == null || !(t > this.t)) { this.x = x; this.t = t; return x; }
+    const dt = t - this.t; this.t = t;
+    const dx = (x - this.x) / dt, ad = OneEuro.alpha(this.dCutoff, dt);
+    this.dx += ad * (dx - this.dx);
+    const a = OneEuro.alpha(this.minCutoff + this.beta * Math.abs(this.dx), dt);
+    this.x += a * (x - this.x);
+    return this.x;
+  }
+}
+/*</pure>*/
+</script>
+
+<script>
+/* ---------- App ---------- */
+(() => {
+  const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js";
+  const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
+  const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+  const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
+  const NR = 28, NY = 18, NA = 6, NS = 12;
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    view: $("view"), video: $("cam"), canvas: $("gl"), pill: $("pill"), pillText: $("pillText"), meter: $("meter"),
+    tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
+    sizes: $("sizes"), swatches: $("swatches"), height: $("height"), height0: $("height0"),
+    factGarment: $("factGarment"), factBody: $("factBody"), modeTrue: $("modeTrue"), modeFit: $("modeFit"),
+    probe: $("probe"), start: $("start"), error: $("error"), fov: $("fov"), devices: $("devices"), pDump: $("pDump"),
+  };
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("tryon." + k); return v == null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem("tryon." + k, v); } catch { /* storage is optional */ } },
+  };
+
+  const state = {
+    sizeId: store.get("size", "M"), fabric: store.get("fabric", FABRICS[0][1]), mode: store.get("mode", "true"),
+    heightCm: Number(store.get("height", 170)) || 170, fovLong: Number(store.get("fov", 67)) || 67,
+    facing: "environment", mirrored: false, running: false, stream: null, track: null, delegate: "--",
+    fps: 0, inferMs: 0, ppcVideo: null, metrics: null, hasPerson: false, lastSeen: 0,
+    focus: { last: undefined, changes: 0, min: Infinity, max: -Infinity },
+  };
+  window.__bench = state; // lets a test harness read the live numbers
+
+  let THREE = null, landmarker = null, renderer = null, scene = null, camera = null;
+  let torso = null, sleeveL = null, sleeveR = null, joints = null;
+  const materials = [], yawSin = new OneEuro(1.2, 0.2), yawCos = new OneEuro(1.2, 0.2);
+  let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5]);
+  const calib = new Calibrator();
+  const filters = Array.from({ length: 33 }, () => [new OneEuro(), new OneEuro()]);
+  let ppcSmooth = null, lastVideoTime = -1, lastUi = 0, showJoints = false;
+
+  /* ----- small UI helpers ----- */
+  function setPill(stateName, text) { el.pill.dataset.state = stateName; el.pillText.textContent = text; }
+  function showError(msg) { el.error.textContent = msg; el.error.hidden = false; }
+  function clearError() { el.error.hidden = true; }
+  const fmt = (n, d = 1) => (Number.isFinite(n) ? n.toFixed(d) : "--");
+
+  function buildControls() {
+    let lastKids = null;
+    for (const row of SIZE_CHART) {
+      if (lastKids === true && !row.kids) { const s = document.createElement("span"); s.className = "sep"; el.sizes.append(s); }
+      lastKids = !!row.kids;
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = row.id; b.setAttribute("role", "radio"); b.dataset.size = row.id;
+      b.addEventListener("click", () => selectSize(row.id));
+      el.sizes.append(b);
+    }
+    for (const [name, hex] of FABRICS) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "swatch"; b.style.background = hex; b.title = name; b.setAttribute("aria-label", name);
+      b.setAttribute("role", "radio"); b.dataset.hex = hex;
+      b.addEventListener("click", () => selectFabric(hex));
+      el.swatches.append(b);
+    }
+    el.height.value = el.height0.value = state.heightCm; el.fov.value = state.fovLong;
+    selectSize(state.sizeId); selectFabric(state.fabric); setMode(state.mode);
+  }
+
+  function selectSize(id) {
+    const row = SIZE_CHART.find((r) => r.id === id) || SIZE_CHART[5];
+    state.sizeId = row.id; store.set("size", row.id);
+    spec = garmentSpec(row);
+    if (torso) setTorso();
+    for (const b of el.sizes.querySelectorAll(".chip")) b.setAttribute("aria-checked", String(b.dataset.size === row.id));
+    el.factGarment.textContent = `${row.id}: chest ${row.chest * 2} around, shoulder ${row.shoulder}, length ${row.length}, sleeve ${row.sleeve} cm (example chart)`;
+  }
+  function hexToRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
+  function selectFabric(hex) {
+    state.fabric = hex; store.set("fabric", hex);
+    for (const mt of materials) mt.uniforms.fabric.value.set(...hexToRgb(hex));
+    for (const b of el.swatches.querySelectorAll(".swatch")) b.setAttribute("aria-checked", String(b.dataset.hex === hex));
+  }
+  function setMode(mode) {
+    state.mode = mode === "fit" ? "fit" : "true"; store.set("mode", state.mode);
+    el.modeTrue.setAttribute("aria-pressed", String(state.mode === "true"));
+    el.modeFit.setAttribute("aria-pressed", String(state.mode === "fit"));
+  }
+  function setHeight(v, from) {
+    const n = Math.round(Number(v));
+    if (!(n >= 60 && n <= 220)) return;
+    if (n !== state.heightCm) { state.heightCm = n; store.set("height", n); resetScale(); }
+    if (from !== el.height) el.height.value = n;
+    if (from !== el.height0) el.height0.value = n;
+  }
+  function resetScale() { calib.reset(); ppcSmooth = null; state.ppcVideo = null; el.factBody.textContent = "Not measured yet"; }
+
+  /* ----- graphics ----- */
+  function makeMaterial() {
+    const mt = new THREE.ShaderMaterial({
+      transparent: true, depthTest: true, depthWrite: true, side: THREE.DoubleSide,
+      uniforms: {
+        fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
+        O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) }, k: { value: 1 }, yaw: { value: 0 },
+      },
+      vertexShader: `
+        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 V; uniform float k; uniform float yaw;
+        varying vec3 vG; varying vec3 vP; varying vec3 vN;
+        void main() {
+          float c = cos(yaw), s = sin(yaw);
+          vec3 p = vec3(position.x * c + position.z * s, position.y, -position.x * s + position.z * c);   // turn with the body
+          vN = vec3(normal.x * c + normal.z * s, normal.y, -normal.x * s + normal.z * c);
+          vG = g; vP = position;
+          vec2 scr = O + (p.x * U + p.y * V) * k;
+          gl_Position = projectionMatrix * vec4(scr, p.z * 0.04, 1.0);
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        uniform vec3 fabric; uniform vec3 neck; uniform float alpha; varying vec3 vG; varying vec3 vP; varying vec3 vN;
+        void main() {
+          vec3 n = normalize(vN);
+          bool inside = n.z < 0.0;                          // surface faces away: we are looking at the inside of the garment
+          if (inside && alpha < 0.9) discard;               // the see-through preview shows the outside only
+          if (vG.z < 0.5) {
+            float drop = vP.z > 0.0 ? neck.y : neck.z;      // deep at the front, shallow at the back
+            float e = (vP.x * vP.x) / (neck.x * neck.x) + (vP.y * vP.y) / (drop * drop);
+            if (e < 1.0) discard;                           // neck opening
+            if (e < 1.3 && !inside) { gl_FragColor = vec4(fabric * 0.8 * (0.55 + 0.45 * n.z), alpha); return; }   // collar rib
+          }
+          vec3 light = normalize(vec3(-0.35, -0.55, 0.76));
+          float diff = max(dot(inside ? -n : n, light), 0.0);
+          float shade = inside ? 0.42 : 0.5 + 0.58 * diff;
+          shade *= 1.0 - 0.07 * vG.y;
+          shade += 0.03 * sin(vP.x * 0.75 + vP.y * 0.2 + vP.z * 0.5) * smoothstep(0.3, 1.0, vG.y);   // a hint of folds lower down
+          if (vG.y > 0.965) shade *= 0.88;                  // hem stitch line
+          gl_FragColor = vec4(fabric * shade, alpha);
+        }`,
+    });
+    materials.push(mt); return mt;
+  }
+  function makeMesh(tube, cols, rows, order) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(tube.pos, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(tube.nrm, 3));
+    geo.setAttribute("g", new THREE.BufferAttribute(tube.g, 3));
+    geo.setIndex(gridIndex(cols, rows));
+    const m = new THREE.Mesh(geo, makeMaterial()); m.frustumCulled = false; m.renderOrder = order; m.visible = false; scene.add(m);
+    return m;
+  }
+  function setTube(meshObj, tube) {
+    for (const [name, arr] of [["position", tube.pos], ["normal", tube.nrm]]) { const at = meshObj.geometry.getAttribute(name); at.array.set(arr); at.needsUpdate = true; }
+  }
+  function setTorso() {
+    setTube(torso, torsoTube(spec, NR, NY));
+    torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 0.22 * spec.neckDrop);
+  }
+  function initGraphics() {
+    renderer = new THREE.WebGLRenderer({ canvas: el.canvas, alpha: true, antialias: true });
+    renderer.setClearColor(0x000000, 0);
+    scene = new THREE.Scene();
+    camera = new THREE.OrthographicCamera(0, 1, 0, 1, -10, 10);
+    const rest = { x: 0, y: 1 };
+    sleeveL = makeMesh(sleeveTube(spec, 1, rest, 0, NA, NS), NS + 1, NA, 0);
+    sleeveR = makeMesh(sleeveTube(spec, -1, rest, 0, NA, NS), NS + 1, NA, 0);
+    torso = makeMesh(torsoTube(spec, NR, NY), NR + 1, NY, 1);
+    setTorso();
+    const jg = new THREE.BufferGeometry();
+    jg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(33 * 3), 3));
+    joints = new THREE.Points(jg, new THREE.PointsMaterial({ color: 0xf2c230, size: 7, sizeAttenuation: false, depthTest: false }));
+    joints.frustumCulled = false; joints.renderOrder = 2; joints.visible = false; scene.add(joints);
+    resize();
+  }
+
+  function resize() {
+    if (!renderer) return;
+    const W = el.view.clientWidth, H = el.view.clientHeight;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(W, H, false);
+    camera.left = 0; camera.right = W; camera.top = 0; camera.bottom = H; camera.updateProjectionMatrix();
+  }
+
+  function aim(meshObj, O, axes, k, yaw, ghost) {
+    const u = meshObj.material.uniforms;
+    u.O.value.set(O.x, O.y); u.U.value.set(axes.u.x, axes.u.y); u.V.value.set(axes.v.x, axes.v.y); u.k.value = k; u.yaw.value = yaw; u.alpha.value = ghost ? 0.55 : 1;
+    meshObj.visible = true;
+  }
+  function drawGarment(m, map, ppcScreen, ghost, yaw) {
+    const S = (p) => ({ x: p.x * map.s + map.ox, y: p.y * map.s + map.oy });
+    const ms = { ...m, L: S(m.L), R: S(m.R), sMid: S(m.sMid), hMid: S(m.hMid), elbowL: m.elbowL && S(m.elbowL), elbowR: m.elbowR && S(m.elbowR) };
+    const axes = garmentAxes(ms);
+    // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
+    const O = sub(ms.sMid, mul(axes.v, 0.2 * effectiveShoulderPx(m) * map.s));
+    aim(torso, O, axes, ppcScreen, yaw, ghost);
+    for (const [meshObj, side] of [[sleeveL, 1], [sleeveR, -1]]) {
+      setTube(meshObj, sleeveTube(spec, side, armDir(ms, axes, side), yaw, NA, NS));
+      aim(meshObj, O, axes, ppcScreen, 0, ghost);
+    }
+  }
+  function hideGarment() { if (torso) torso.visible = sleeveL.visible = sleeveR.visible = false; }
+
+  /* ----- camera ----- */
+  async function startCamera(opts) {
+    stopCamera();
+    const video = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
+    if (opts.deviceId) video.deviceId = { exact: opts.deviceId }; else video.facingMode = { ideal: opts.facing };
+    const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    state.stream = stream; state.track = stream.getVideoTracks()[0];
+    const s = state.track.getSettings ? state.track.getSettings() : {};
+    state.facing = s.facingMode || (opts.deviceId ? "unknown" : opts.facing);
+    // Mirror only a camera that faces the user. A desktop webcam reports no direction and is treated as facing the user.
+    state.mirrored = s.facingMode ? s.facingMode === "user" : !/back|rear|environment/i.test(state.track.label || "");
+    el.view.classList.toggle("mirror", state.mirrored);
+    el.video.srcObject = stream;
+    await el.video.play();
+    state.focus = { last: undefined, changes: 0, min: Infinity, max: -Infinity };
+    resetScale(); for (const f of filters) { f[0].x = f[1].x = null; }
+    lastVideoTime = -1;
+    listDevices();
+    if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(() => {});
+  }
+  function stopCamera() { if (state.stream) for (const t of state.stream.getTracks()) t.stop(); state.stream = state.track = null; }
+
+  async function listDevices() {
+    try {
+      const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+      el.devices.textContent = "";
+      const current = state.track && state.track.getSettings ? state.track.getSettings().deviceId : null;
+      all.forEach((d, i) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "btn"; b.textContent = (d.label || `Camera ${i + 1}`) + (d.deviceId === current ? "  (in use)" : "");
+        b.addEventListener("click", () => switchCamera({ deviceId: d.deviceId }));
+        el.devices.append(b);
+      });
+    } catch { /* listing is optional */ }
+  }
+  async function switchCamera(opts) {
+    try { clearError(); await startCamera(opts); } catch (e) { cameraError(e); }
+  }
+  function cameraError(e) {
+    const name = e && e.name;
+    if (name === "NotAllowedError" || name === "SecurityError") showError("The camera is blocked for this page. Allow it in the browser's site settings, then reload.");
+    else if (name === "NotFoundError" || name === "OverconstrainedError") showError("That camera could not be opened. Try the other camera.");
+    else showError("The camera did not start: " + (e && e.message ? e.message : e));
+    setPill("bad", "Camera not running");
+  }
+
+  /* ----- tracker ----- */
+  async function loadTracker() {
+    setPill("warn", "Loading tracker");
+    const [three, vision] = await Promise.all([import(THREE_URL), import(VISION_URL)]);
+    THREE = three;
+    const files = await vision.FilesetResolver.forVisionTasks(VISION_WASM);
+    const make = (delegate) => vision.PoseLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate }, runningMode: "VIDEO", numPoses: 1,
+      minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+    });
+    try { landmarker = await make("GPU"); state.delegate = "graphics chip (GPU)"; }
+    catch { landmarker = await make("CPU"); state.delegate = "processor (CPU)"; }
+    initGraphics(); selectFabric(state.fabric);
+  }
+
+  function schedule() {
+    if (!state.running) return;
+    if (el.video.requestVideoFrameCallback) el.video.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+  }
+
+  function tick() {
+    if (!state.running) return;
+    const v = el.video;
+    if (v.readyState >= 2 && v.videoWidth && v.currentTime !== lastVideoTime && !document.hidden) {
+      lastVideoTime = v.currentTime;
+      const t0 = performance.now();
+      let res = null;
+      try { res = landmarker.detectForVideo(v, t0); } catch (e) { console.error(e); }
+      const t1 = performance.now();
+      state.inferMs += 0.15 * (t1 - t0 - state.inferMs);
+      if (state._lastTick) state.fps += 0.15 * (1000 / Math.max(1, t0 - state._lastTick) - state.fps);
+      state._lastTick = t0;
+      onPose(res, t0);
+    }
+    schedule();
+  }
+
+  function onPose(res, now) {
+    const v = el.video, vw = v.videoWidth, vh = v.videoHeight;
+    const W = el.view.clientWidth, H = el.view.clientHeight, map = coverMap(vw, vh, W, H);
+    const raw = res && res.landmarks && res.landmarks[0];
+    if (!raw) {
+      state.hasPerson = false; state.metrics = null; hideGarment(); joints.visible = false;
+      if (now - state.lastSeen > 400) { setPill("warn", "No one in view"); el.tape.hidden = true; }
+      renderer.render(scene, camera); updateUi(now); return;
+    }
+    state.lastSeen = now; state.hasPerson = true;
+    const t = now / 1000;
+    const lm = raw.map((p, i) => ({ x: filters[i][0].filter(p.x, t), y: filters[i][1].filter(p.y, t), visibility: p.visibility }));
+    const m = bodyMetrics(lm, vw, vh); state.metrics = m;
+    // How far the wearer has turned, from the depth difference between the two shoulders (0 = facing the camera).
+    const w = res.worldLandmarks && res.worldLandmarks[0];
+    if (w) { const a = Math.atan2(w[LM.SH_L].z - w[LM.SH_R].z, w[LM.SH_L].x - w[LM.SH_R].x); state.yaw = Math.atan2(yawSin.filter(Math.sin(a), t), yawCos.filter(Math.cos(a), t)); }
+    calib.add(m, state.heightCm);
+    const ppc = calib.ppc(m);
+    if (ppc) ppcSmooth = ppcSmooth == null ? ppc : ppcSmooth + 0.25 * (ppc - ppcSmooth);
+    state.ppcVideo = calib.locked ? ppcSmooth : null;
+
+    if (!m.shouldersOk) { hideGarment(); setPill("warn", "Shoulders not visible"); }
+    else {
+      const fitPpc = (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
+      const trueSize = state.mode === "true" && state.ppcVideo;
+      drawGarment(m, map, (trueSize ? state.ppcVideo : fitPpc) * map.s, state.mode === "true" && !trueSize, state.yaw || 0);
+      if (state.mode === "fit") setPill("warn", "Fit to body: not to scale");
+      else if (trueSize) setPill("ok", "True size, scale set");
+      else setPill("warn", m.upright ? "Setting scale, hold still" : m.fullBody ? "Stand straight, facing the camera" : "Step back: head and feet in view");
+    }
+    if (state.ppcVideo) {
+      el.tape.hidden = false; el.tapeBar.style.width = Math.max(8, 10 * state.ppcVideo * map.s).toFixed(1) + "px";
+      el.tape.style.bottom = (el.sheet.offsetWidth < W ? 12 : el.sheet.offsetHeight + 8) + "px";
+    } else el.tape.hidden = true;
+
+    joints.visible = showJoints;
+    if (showJoints) {
+      const a = joints.geometry.getAttribute("position").array;
+      lm.forEach((p, i) => { a[i * 3] = p.x * vw * map.s + map.ox; a[i * 3 + 1] = p.y * vh * map.s + map.oy; a[i * 3 + 2] = 0; });
+      joints.geometry.getAttribute("position").needsUpdate = true;
+    }
+    renderer.render(scene, camera);
+    updateUi(now);
+  }
+
+  /* ----- readouts ----- */
+  function pollFocus() {
+    const tr = state.track; if (!tr || !tr.getSettings) return;
+    const fd = tr.getSettings().focusDistance, f = state.focus;
+    if (typeof fd === "number") {
+      if (f.last !== undefined && fd !== f.last) f.changes++;
+      f.last = fd; f.min = Math.min(f.min, fd); f.max = Math.max(f.max, fd);
+    }
+  }
+  function distanceNow() {
+    if (!state.ppcVideo) return null;
+    return distanceM(focalPx(el.video.videoWidth, el.video.videoHeight, state.fovLong), state.ppcVideo);
+  }
+  function updateUi(now) {
+    if (now - lastUi < 300) return; lastUi = now;
+    const d = distanceNow();
+    el.meter.textContent = `${fmt(state.fps, 0)} fps` + (d ? `\n${fmt(d, 2)} m` : "");
+    el.meter.style.whiteSpace = "pre";
+    if (calib.locked) el.factBody.textContent = `shoulder joints ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm (approximate)`;
+    if (!el.probe.hidden) renderProbe();
+  }
+  function probeFacts() {
+    const tr = state.track, f = state.focus, v = el.video;
+    const settings = tr && tr.getSettings ? tr.getSettings() : {};
+    const caps = tr && tr.getCapabilities ? tr.getCapabilities() : null;
+    const range = caps && caps.focusDistance ? ` (range ${caps.focusDistance.min} to ${caps.focusDistance.max}, step ${caps.focusDistance.step})` : "";
+    return {
+      focus: typeof f.last === "number" ? `${f.last}${range}` : "not reported by this camera",
+      focusMode: settings.focusMode || (caps && caps.focusMode ? "modes: " + caps.focusMode.join(", ") : "not reported"),
+      focusChanges: typeof f.last === "number" ? `${f.changes} (seen ${f.min} to ${f.max})` : "--",
+      dist: distanceNow() ? `${fmt(distanceNow(), 2)} m` : "needs the scale: head and feet in view",
+      scale: state.ppcVideo ? `${fmt(state.ppcVideo, 2)} video pixels per cm` : "not set",
+      video: v.videoWidth ? `${v.videoWidth} x ${v.videoHeight}, ${settings.frameRate ? fmt(settings.frameRate, 0) + " fps" : "rate not reported"}, ${state.facing} camera` : "--",
+      speed: `${fmt(state.fps, 0)} per second, ${fmt(state.inferMs, 0)} ms each`,
+      delegate: state.delegate, settings, caps,
+    };
+  }
+  function renderProbe() {
+    const p = probeFacts();
+    $("pFocus").textContent = p.focus; $("pFocusMode").textContent = p.focusMode; $("pFocusChanges").textContent = p.focusChanges;
+    $("pDist").textContent = p.dist; $("pScale").textContent = p.scale; $("pVideo").textContent = p.video;
+    $("pSpeed").textContent = p.speed; $("pDelegate").textContent = p.delegate;
+    el.pDump.textContent = probeText(p);
+  }
+  function probeText(p) {
+    return [
+      "TRY-ON BENCH READOUT",
+      "Browser: " + navigator.userAgent,
+      "Camera: " + (state.track ? state.track.label || "(no name)" : "not started"),
+      "Video: " + p.video,
+      "Focus distance: " + p.focus,
+      "Focus mode: " + p.focusMode,
+      "Focus value changes: " + p.focusChanges,
+      "Distance from height + lens angle: " + p.dist + ` (height ${state.heightCm} cm, lens angle ${state.fovLong} deg)`,
+      "Scale: " + p.scale,
+      "Turn: " + fmt(((state.yaw || 0) * 180) / Math.PI, 0) + " deg",
+      "Tracking: " + p.speed + ", on " + p.delegate,
+      "Settings: " + JSON.stringify(p.settings, null, 1),
+      "Capabilities: " + (p.caps ? JSON.stringify(p.caps, null, 1) : "not available in this browser"),
+    ].join("\n");
+  }
+
+  /* ----- wiring ----- */
+  async function begin(facing) {
+    clearError();
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError("This page can only use the camera from an https:// address (or localhost on a computer)."); return;
+    }
+    setHeight(el.height0.value, el.height0);
+    el.start.hidden = true;
+    try { await startCamera({ facing }); } catch (e) { cameraError(e); el.start.hidden = false; return; }
+    try { if (!landmarker) await loadTracker(); }
+    catch (e) { console.error(e); showError("The tracking software did not load. Check the internet connection and reload. (" + (e && e.message ? e.message : e) + ")"); setPill("bad", "Tracker not loaded"); return; }
+    setPill("warn", "Looking for a person");
+    if (!state.running) { state.running = true; schedule(); }
+  }
+
+  buildControls();
+  $("startRear").addEventListener("click", () => begin("environment"));
+  $("startFront").addEventListener("click", () => begin("user"));
+  $("flip").addEventListener("click", () => switchCamera({ facing: state.facing === "user" ? "environment" : "user" }));
+  el.modeTrue.addEventListener("click", () => setMode("true"));
+  el.modeFit.addEventListener("click", () => setMode("fit"));
+  el.height.addEventListener("change", () => setHeight(el.height.value, el.height));
+  el.height0.addEventListener("change", () => setHeight(el.height0.value, el.height0));
+  el.fov.addEventListener("change", () => { const n = Number(el.fov.value); if (n >= 30 && n <= 120) { state.fovLong = n; store.set("fov", n); } });
+  el.sheetToggle.addEventListener("click", () => {
+    const open = el.sheetBody.hidden; el.sheetBody.hidden = !open; el.sheetBody.style.display = open ? "contents" : "none";
+    el.sheetToggle.textContent = open ? "Hide controls" : "Show controls"; el.sheetToggle.setAttribute("aria-expanded", String(open));
+  });
+  $("openProbe").addEventListener("click", () => { el.probe.hidden = false; renderProbe(); });
+  $("closeProbe").addEventListener("click", () => { el.probe.hidden = true; });
+  $("resetScale").addEventListener("click", resetScale);
+  $("copyProbe").addEventListener("click", async (ev) => {
+    const text = probeText(probeFacts()), btn = ev.currentTarget;
+    try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+    catch {
+      const r = document.createRange(); r.selectNodeContents(el.pDump); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = "Selected below: copy it";
+    }
+    setTimeout(() => { btn.textContent = "Copy readout"; }, 2500);
+  });
+  el.pill.style.pointerEvents = "auto";
+  el.pill.addEventListener("click", () => { showJoints = !showJoints; }); // tap the status to show or hide the tracked joints
+  setInterval(pollFocus, 400);
+  setInterval(() => { if (!el.probe.hidden && !state.hasPerson) renderProbe(); }, 600);
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", () => setTimeout(resize, 250));
+})();
+</script>
+</body>
+</html>
