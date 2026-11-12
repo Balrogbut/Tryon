@@ -269,7 +269,7 @@ const EYE_HEEL_RATIO = 0.92;   // eye-to-heel distance as a share of standing he
 const WORN_WIDTH = 0.75;       // a flat width W wraps a body as a tube of girth 2W, which looks about 0.75 W wide from the front
 const TUBE = 2 / Math.PI;      // a sleeve opening of flat width W is a tube about 0.64 W across
 const SEAM_OVER_JOINTS = 1.15; // shoulder seam width of a well-fitting tee relative to the tracked shoulder-point distance
-const LIFT = 0.17;             // base of the neck above the line between the tracked shoulder points, as a share of their distance
+const LIFT = 0.21;             // base of the neck above the line between the tracked shoulder points, as a share of their distance
 
 function garmentSpec(row) {
   return {
@@ -430,7 +430,7 @@ function defaultBody(spec) { return bodyShape(spec.shHalf / SEAM_OVER_JOINTS); }
 // it slopes from the neck down to the shoulder point, then rounds over the shoulder and falls with the arm.
 function shoulderLine(spec, body, ax) {
   if (ax <= spec.neckHalf) return 0;
-  const tipX = Math.max(body.jHalf, spec.neckHalf + 4), tipY = Math.max(-8, Math.min(14, body.lift - 1.5)), R = 6;   // negative when the shoulders are raised above the neck base
+  const tipX = Math.max(body.jHalf, spec.neckHalf + 4), tipY = Math.max(-8, Math.min(14, body.lift - 4.5)), R = 6;   // the shoulder's surface is about 4.5 cm above the tracked point inside it;   // negative when the shoulders are raised above the neck base
   if (ax <= tipX) return (tipY * (ax - spec.neckHalf)) / (tipX - spec.neckHalf);
   const o = Math.min(ax - tipX, R * 0.97);
   return tipY + R - Math.sqrt(R * R - o * o);
@@ -484,12 +484,13 @@ function sleeveTube(spec, side, d, yaw, na, nr, body) {
     const w = smooth(0.05, 0.55, a), pa = add(start, mul(lead, L * a)), pb = add(J, mul(d, s0 + L * a));
     return { x: pa.x + (pb.x - pa.x) * w, y: pa.y + (pb.y - pa.y) * w };
   };
-  const cz = -c0.x * syaw, r1 = 0.5 * spec.sleeveOpen, rz0 = 0.8 * half;
+  const cz = -c0.x * syaw, r1 = 0.5 * spec.sleeveOpen, rz0 = 0.6 * half;
   for (let j = 0; j < na; j++) {
     const a = j / (na - 1), c = centre(a);
     const t = j === 0 ? n0 : norm(sub(centre(Math.min(1, a + 0.06)), centre(Math.max(0, a - 0.06))));
     const e1 = { x: -t.y * side, y: t.x * side };                    // across the sleeve, pointing to its underside
-    const r = half + (r1 - half) * a, rz = rz0 + (r1 - rz0) * a;
+    const ta = 1 - (1 - a) * (1 - a) * (1 - a);                      // narrows quickly after the armhole, as a real sleeve does
+    const r = half + (r1 - half) * ta, rz = rz0 + (r1 - rz0) * ta;
     for (let i = 0; i < cols; i++) {
       const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
       pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = cz + rz * sn;
@@ -575,7 +576,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "11 (collar stays at the neck when arms go up)";
+  const BUILD = "12 (shoulders cover the wearer, slimmer sleeves)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
