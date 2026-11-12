@@ -160,6 +160,7 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
         <button class="chip" type="button" id="printBtn">Add chest print</button>
         <input id="printFile" type="file" accept="image/*" hidden>
       </div>
+      <div class="row"><button class="btn" id="turnBtn" type="button" style="flex:none">Measure me: one slow turn</button></div>
       <dl class="facts">
         <dt>Garment</dt><dd id="factGarment">--</dd>
         <dt>Body</dt><dd id="factBody">Not measured yet</dd>
@@ -467,30 +468,60 @@ function silhouetteHalfWidths(data, w, h, cx, cy, ux, uy, limit) {
 // The wearer's half-width (cm) at a height y on the garment, from measured chest, waist and hip. null above the chest.
 function bodyHalfAt(pr, y) {
   if (!pr || y < pr.yChest - 4) return null;
-  const pts = [[pr.yChest, pr.chest], [pr.yWaist, pr.waist], [pr.yHip, pr.hip]].filter((q) => q[1] != null);
+  const pts = [[pr.yChest, pr.chest], [pr.yUnder, pr.under], [pr.yWaist, pr.waist], [pr.yHip, pr.hip]].filter((q) => q[0] != null && q[1] != null);
   if (!pts.length) return null;
   if (y <= pts[0][0]) return pts[0][1];
   for (let i = 1; i < pts.length; i++) if (y <= pts[i][0]) { const k = (y - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]); return pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k; }
   return pts[pts.length - 1][1];
 }
-function depthRatioAt(pr, y) { return y <= pr.yChest ? DEPTH_RATIO.chest : y >= pr.yHip ? DEPTH_RATIO.hip : DEPTH_RATIO.waist; }
+// Depth-to-width ratio at a height: measured from the turn where available, otherwise the assumed value.
+function depthRatioAt(pr, y) {
+  const r = y <= pr.yChest ? [pr.rChest, DEPTH_RATIO.chest] : y >= pr.yHip ? [pr.rHip, DEPTH_RATIO.hip] : [pr.rWaist, DEPTH_RATIO.waist];
+  return r[0] == null ? r[1] : r[0];
+}
+const linAt = (pts, y) => {
+  if (y <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) if (y <= pts[i][0]) return pts[i - 1][1] + ((pts[i][1] - pts[i - 1][1]) * (y - pts[i - 1][0])) / (pts[i][0] - pts[i - 1][0]);
+  return pts[pts.length - 1][1];
+};
 
 // Zone by zone: does this garment go round this body? spare = garment girth minus body girth, in cm.
 function fitReport(row, pr) {
   const out = [];
-  for (const [zone, half, flat] of [["chest", pr.chest, row.chest], ["waist", pr.waist, row.chest * 1.02], ["hips", pr.hip, row.chest * 1.04]]) {
+  for (const [zone, half, flat, ratio] of [["chest", pr.chest, row.chest, pr.rChest == null ? DEPTH_RATIO.chest : pr.rChest], ["waist", pr.waist, row.chest * 1.02, pr.rWaist == null ? DEPTH_RATIO.waist : pr.rWaist], ["hips", pr.hip, row.chest * 1.04, pr.rHip == null ? DEPTH_RATIO.hip : pr.rHip]]) {
     if (half == null) continue;
-    const spare = 2 * flat - girthFromWidth(2 * half, DEPTH_RATIO[zone === "hips" ? "hip" : zone]);
-    out.push({ zone, spare, verdict: spare < 0 ? "too tight" : spare < 4 ? "snug" : spare <= 22 ? "fits" : "loose" });
+    const girth = girthFromWidth(2 * half, ratio), spare = 2 * flat - girth;
+    out.push({ zone, girth, spare, verdict: spare < 0 ? "too tight" : spare < 4 ? "snug" : spare <= 22 ? "fits" : "loose" });
   }
   return out;
 }
+
+// ---- Turn capture: the wearer turns on the spot and the outline is read at many angles. ----
+// Seen from an angle a (0 = facing the camera), a body cross-section with half-width A and half-depth C looks
+// sqrt(A^2 cos^2 a + C^2 sin^2 a) wide on each side. Many readings of (cos^2 a, half-width) give A and C by least
+// squares. The readings are first grouped by angle and reduced to medians, so a few bad ones do not matter.
+function fitEllipse(samples) {
+  const bins = [[], [], [], [], [], []];
+  for (const q of samples) if (q.half > 0 && q.c2 >= 0 && q.c2 <= 1) bins[Math.min(5, Math.floor(q.c2 * 6))].push(q);
+  const pts = bins.filter((b) => b.length >= 2).map((b) => ({ c2: quantile(b.map((q) => q.c2), 0.5), v: quantile(b.map((q) => q.half), 0.5) ** 2 }));
+  if (pts.length < 2 || pts[pts.length - 1].c2 - pts[0].c2 < 0.5) return null;      // needs both a front-ish and a side-ish view
+  let s11 = 0, s12 = 0, s22 = 0, b1 = 0, b2 = 0;
+  for (const q of pts) { const x = q.c2, y = 1 - q.c2; s11 += x * x; s12 += x * y; s22 += y * y; b1 += x * q.v; b2 += y * q.v; }
+  const det = s11 * s22 - s12 * s12; if (Math.abs(det) < 1e-9) return null;
+  const A = (b1 * s22 - b2 * s12) / det, C = (s11 * b2 - s12 * b1) / det;
+  if (!(A > 1)) return null;
+  const a = Math.sqrt(A), c = Math.sqrt(Math.min(Math.max(C, (0.4 * a) ** 2), (1.5 * a) ** 2));
+  return { a, c };
+}
+function turnCoverage(samples) { let front = 0, side = 0; for (const q of samples) { if (q.c2 > 0.75) front++; else if (q.c2 < 0.2) side++; } return { front, side }; }
 
 function torsoTube(spec, nr, ny, body) {
   body = body || defaultBody(spec);
   const pr = body.profile || null, fitDefault = body.fitDefault || 0;
   const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3), uv = new Float32Array(cols * ny * 2), fit = new Float32Array(cols * ny);
   const hemY = spec.length - spec.hemCurve, ta = spec.armhole / spec.length;
+  // First pass: one cross-section per row. Width, depth in front and behind, and strain.
+  const rows = [];
   for (let j = 0; j < ny; j++) {
     const t = j / (ny - 1), k = Math.min(1, t / ta), e = k * k * (3 - 2 * k);
     const hwOwn = (spec.shHalf + (spec.chHalf - spec.shHalf) * e) * (1 + 0.04 * Math.max(0, (t - ta) / (1 - ta)));
@@ -504,15 +535,28 @@ function torsoTube(spec, nr, ny, body) {
       strain = ((girthFromWidth(2 * bh, depthRatioAt(pr, yRow)) + 4) / (2 * flat) - 1) * w0;
     }
     const hd = hw * (0.4 + 0.26 * e);                      // flat across the shoulders, rounder at the chest
+    let zf = hd, zb = hd;
+    if (pr && pr.front && pr.back) {
+      // Measured depth, front and back separately, so a bust or belly sits forward and a seat sits back.
+      // Below the fullest point of the chest the cloth hangs from it instead of tucking in underneath.
+      const w1 = smooth(pr.yChest - 9, pr.yChest, yRow);
+      let f = linAt(pr.front, yRow); if (yRow > pr.yChest) f = Math.max(f, pr.front[0][1] - 0.3 * (yRow - pr.yChest));
+      zf = hd + Math.max(0, f + 0.3 - hd) * w1; zb = hd + Math.max(0, linAt(pr.back, yRow) + 0.3 - hd) * w1;
+    }
+    rows.push({ t, e, hw, zf, zb, strain, yRow });
+  }
+  for (let j = 0; j < ny; j++) {
+    const { t, e, hw, zf, zb, strain } = rows[j], a = rows[Math.max(0, j - 1)], b = rows[Math.min(ny - 1, j + 1)];
+    const slope = (b.zf - a.zf) / Math.max(1e-6, b.yRow - a.yRow);   // how the front surface leans: shades the underside of a bust or belly
     for (let i = 0; i < cols; i++) {
-      const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi);
+      const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi), hd = cz >= 0 ? zf : zb;
       const ax = Math.abs(sx) * spec.shHalf;
       const yTop = shoulderLine(spec, body, ax);
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = sx / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
       pos[n] = hw * sx; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
-      const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fl = Math.hypot(fx, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
-      nrm[n] = fx / fl; nrm[n + 1] = 0; nrm[n + 2] = fz / fl;
+      const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fy = cz > 0 ? -slope * cz : 0, fl = Math.hypot(fx, fy, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
+      nrm[n] = fx / fl; nrm[n + 1] = fy / fl; nrm[n + 2] = fz / fl;
       g[n] = sx; g[n + 1] = t; g[n + 2] = 0; fit[n / 3] = strain;
       uv[(n / 3) * 2] = phi * hw; uv[(n / 3) * 2 + 1] = pos[n + 1];      // fabric coordinates in cm: around the body, down the body
     }
@@ -631,7 +675,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "15 (measures waist and hips from the body outline)";
+  const BUILD = "16 (measure by turning: chest, waist and hips all round)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
@@ -742,7 +786,7 @@ class OneEuro {
   function setHeight(v, from) {
     const n = Math.round(Number(v));
     if (!(n >= 60 && n <= 220)) return;
-    if (n !== state.heightCm) { state.heightCm = n; store.set("height", n); resetScale(); }
+    if (n !== state.heightCm) { state.heightCm = n; store.set("height", n); if (typeof clearTurn === "function") clearTurn(); resetScale(); }
     if (from !== el.height) el.height.value = n;
     if (from !== el.height0) el.height0.value = n;
   }
@@ -941,7 +985,7 @@ class OneEuro {
     const lift = neckLift(m, axes.v) * map.s;
     const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
     body.profile = shapeProfile(liftCm); body.fitDefault = Math.round((1 / state.ease - 1) * 40) / 40;
-    const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + (body.profile ? [body.profile.chest, body.profile.waist, body.profile.hip, body.profile.yWaist].map((x) => (x == null ? "-" : Math.round(x * 2))).join(",") : "");
+    const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + JSON.stringify(body.profile, (k, x) => (typeof x === "number" ? Math.round(x * 2) / 2 : x));
     if (bodyKey !== torsoBody) { torsoBody = bodyKey; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
     const O = sub(ms.sMid, mul(axes.v, lift));
     const hipY = m.hipsOk ? (m.torsoPx * map.s + lift) / ppcScreen : 1e4;
@@ -1022,21 +1066,115 @@ class OneEuro {
   let shaper = null, shaperFailed = false, makeTracker = null, lastShape = 0;
   const shape = { waist: [], hip: [], tries: 0 };
   state.shape = shape;
-  function resetShape() { shape.waist = []; shape.hip = []; shape.tries = 0; el.factFit.textContent = "Not measured yet"; }
+  function resetShape() { shape.waist = []; shape.hip = []; shape.tries = 0; el.factFit.textContent = "Not measured yet"; turn.on = false; setTurnButton(); }
+  function clearTurn() { state.turnProfile = null; store.set("turn", "null"); setTurnButton(); }
   const median = (a) => (a.length ? quantile(a, 0.5) : null);
   // Body widths as half-widths in cm, placed at heights on the garment. Chest comes from the shoulder points,
   // waist and hips from the outline. Returns null until the scale is known.
   function shapeProfile(liftCm) {
     if (state.mode !== "true" || !calib.locked) return null;
     const torso = calib.torsoCm, lift = liftCm == null ? LIFT * calib.shoulderCm : liftCm;
+    const tp = state.turnProfile;
+    if (tp) {                                             // measured all round from a turn
+      const Y = (t) => lift + t * torso, z = tp.zones;
+      const pr = { measured: true, yChest: Y(ZONES.bust), yUnder: Y(ZONES.under), yWaist: Y(ZONES.waist), yHip: Y(ZONES.hip),
+        chest: z.bust.a, under: z.under ? z.under.a : null, waist: z.waist ? z.waist.a : null, hip: z.hip ? z.hip.a : null,
+        rChest: z.bust.c / z.bust.a, rWaist: z.waist ? z.waist.c / z.waist.a : null, rHip: z.hip ? z.hip.c / z.hip.a : null };
+      const names = ["bust", "under", "waist", "hip"].filter((n) => z[n] && z[n].front != null);
+      if (names[0] === "bust" && names.length >= 2) { pr.front = names.map((n) => [Y(ZONES[n]), z[n].front]); pr.back = names.map((n) => [Y(ZONES[n]), z[n].back]); }
+      return pr;
+    }
     return { yChest: lift + 0.25 * torso, yWaist: lift + 0.68 * torso, yHip: lift + 1.05 * torso,
       chest: (calib.shoulderCm * 0.98) / 2, waist: shape.waist.length >= 3 ? median(shape.waist) : null, hip: shape.hip.length >= 3 ? median(shape.hip) : null };
   }
+
+  /* ----- turn capture: outline read all the way round, once ----- */
+  const ZONES = { bust: 0.3, under: 0.42, waist: 0.68, hip: 1.05 };   // heights as a share of the shoulder-to-hip distance
+  const turn = { on: false, t0: 0, n: 0, zones: null, msg: "" };
+  state.turn = turn;
+  try { const saved = JSON.parse(store.get("turn", "null")); if (saved && saved.height === state.heightCm && saved.zones && saved.zones.bust) state.turnProfile = saved; } catch { /* no saved profile */ }
+  function startTurn() {
+    if (turn.on) { turn.on = false; turn.msg = ""; setTurnButton(); return; }
+    if (!calib.locked && !state.forceShape) { turn.msg = "Set the scale first: face the camera with head and hips in view."; setTimeout(() => { turn.msg = ""; }, 4000); return; }
+    if (!makeTracker || shaperFailed) { turn.msg = "Outline reading is not available on this device."; return; }
+    turn.on = true; turn.t0 = performance.now(); turn.n = 0; turn.msg = ""; turn.zones = { bust: [], under: [], waist: [], hip: [] };
+    if (!shaper) { shaper = "loading"; makeTracker(true).then((t) => { shaper = t; }).catch((e) => { console.error(e); shaperFailed = true; turn.on = false; setTurnButton(); }); }
+    setTurnButton();
+  }
+  function setTurnButton() { $("turnBtn").textContent = turn.on ? "Stop measuring" : state.turnProfile ? "Measure again: one slow turn" : "Measure me: one slow turn"; }
+  // One reading of the outline at every zone, tagged with how wide the shoulders and hips look right now.
+  // Shoulders and hips look narrower as the wearer turns, and that narrowing is what gives the angle.
+  function captureTurn(res, now) {
+    const lm = res && res.landmarks && res.landmarks[0], mask = res && res.segmentationMasks && res.segmentationMasks[0];
+    try {
+      if (!lm || !mask) return;
+      const v = el.video, vw = v.videoWidth, vh = v.videoHeight, m = bodyMetrics(lm, vw, vh);
+      if (!m.shouldersOk || !m.hipsOk || !(m.torsoPx > 20)) return;
+      const ppc = calib.torsoCm ? m.torsoPx / calib.torsoCm : 1;                 // torso length does not shrink when turning, so it carries the scale
+      const data = mask.getAsFloat32Array(), w = mask.width, h = mask.height, kx = w / vw, ky = h / vh;
+      const P = (i) => ({ x: lm[i].x * vw, y: lm[i].y * vh });
+      const vAx = norm(sub(m.hMid, m.sMid)), uAx = { x: -vAx.y, y: vAx.x };
+      const nose = dot(sub(P(0), m.earMid), uAx), frontSign = Math.abs(nose) > 0.12 * m.headPx ? Math.sign(nose) : 0;   // which way the wearer faces in the picture
+      const shApp = m.shoulderPx / ppc, hipApp = len(sub(m.hipL, m.hipR)) / ppc, armR = 5.5 * (m.torsoPx / 50);
+      for (const name in ZONES) {
+        const c = add(m.sMid, mul(sub(m.hMid, m.sMid), ZONES[name]));
+        const hw = silhouetteHalfWidths(data, w, h, c.x * kx, c.y * ky, uAx.x * kx, uAx.y * ky, Math.round(1.6 * m.torsoPx));
+        if (!hw || hw.pos == null || hw.neg == null) continue;
+        let touching = false;                                                    // an arm resting on the body would be read as body
+        for (const [sh, el2, wr] of [[LM.SH_L, LM.EL_L, LM.WR_L], [LM.SH_R, LM.EL_R, LM.WR_R]]) for (const [a, b] of [[P(sh), P(el2)], [P(el2), P(wr)]]) {
+          const ya = dot(sub(a, c), vAx), yb = dot(sub(b, c), vAx);
+          if ((ya <= 0 && yb >= 0) || (ya >= 0 && yb <= 0)) { const k = ya === yb ? 0 : ya / (ya - yb), lat = dot(sub(add(a, mul(sub(b, a), k)), c), uAx), d = (lat > 0 ? hw.pos : hw.neg) / kx; if (Math.abs(lat) > armR && Math.abs(lat) - armR <= d + 3) touching = true; }
+        }
+        if (touching) continue;
+        const pos = hw.pos / kx / ppc, neg = hw.neg / kx / ppc;
+        turn.zones[name].push({ shApp, hipApp, half: (pos + neg) / 2, front: frontSign > 0 ? pos : frontSign < 0 ? neg : null, back: frontSign > 0 ? neg : frontSign < 0 ? pos : null });
+      }
+      turn.n++;
+      if (turn.n % 6 === 0) { const cov = turnProgress(); if (cov.done) finishTurn(); }
+      if (now - turn.t0 > 40000) finishTurn();
+    } catch (e) { console.error(e); shaperFailed = true; turn.on = false; setTurnButton(); }
+    finally { if (mask && mask.close) mask.close(); }
+  }
+  // Angle of each reading: apparent shoulder (or hip) width against the widest it was seen during the turn.
+  function turnSamples(name) {
+    const all = [].concat(...Object.values(turn.zones)); if (all.length < 6) return [];
+    const shMax = quantile(all.map((q) => q.shApp), 0.95), hipMax = quantile(all.map((q) => q.hipApp), 0.95);
+    return turn.zones[name].map((q) => {
+      const cs = Math.min(1, q.shApp / shMax), ch = Math.min(1, q.hipApp / hipMax), c = name === "hip" ? ch : name === "waist" ? (cs + ch) / 2 : cs;
+      return { c2: c * c, half: q.half, front: q.front, back: q.back };
+    });
+  }
+  function turnProgress() {
+    const a = turnCoverage(turnSamples("bust")), b = turnCoverage(turnSamples("hip"));
+    // Seen from the front, the upper arms usually rest against the chest, so chest-height front readings are not
+    // required: chest width then comes from the shoulder points and only its depth from the side views.
+    return { front: b.front, side: Math.min(a.side, b.side), done: a.side >= 5 && b.front >= 5 && b.side >= 5 };
+  }
+  function finishTurn() {
+    turn.on = false;
+    const zones = {};
+    for (const name in ZONES) {
+      const smp = turnSamples(name); let fitE = fitEllipse(smp);
+      if (!fitE && (name === "bust" || name === "under") && calib.shoulderCm) {
+        const a = ((calib.shoulderCm * 0.98) / 2) * (name === "under" ? 0.94 : 1), sv = smp.filter((q) => q.c2 < 0.2);
+        if (sv.length >= 3) { const c = quantile(sv.map((q) => Math.sqrt(Math.max(1, (q.half * q.half - a * a * q.c2) / (1 - q.c2)))), 0.5); fitE = { a, c: Math.min(Math.max(c, 0.4 * a), 1.5 * a) }; }
+      }
+      if (!fitE) continue;
+      const side = smp.filter((q) => q.c2 < 0.2 && q.front != null);
+      zones[name] = { a: fitE.a, c: fitE.c, front: side.length >= 3 ? quantile(side.map((q) => q.front), 0.5) : null, back: side.length >= 3 ? quantile(side.map((q) => q.back), 0.5) : null };
+    }
+    if (zones.bust && (zones.waist || zones.hip)) {
+      state.turnProfile = { height: state.heightCm, zones, at: Date.now() }; store.set("turn", JSON.stringify(state.turnProfile));
+      turn.msg = "Measured. The fit line now uses your own shape."; if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
+    } else turn.msg = "Could not see both a front and a side view. Try again: arms slightly away, one slow full turn, more light if you can.";
+    setTimeout(() => { turn.msg = ""; }, 6000); setTurnButton();
+  }
+  state.finishTurn = finishTurn; state.startTurn = startTurn;
   // Reads the body outline at waist and hip level. Runs only while facing the camera, at most ~twice a second,
   // and stops once it has enough readings, because each reading briefly pauses the tracking.
   async function sampleShape(lm, world, m, now) {
     if (shaperFailed || !makeTracker || now - lastShape < 600 || shape.tries > 60) return;
-    if (shape.waist.length >= 8 && shape.hip.length >= 8) return;
+    if (state.turnProfile || turn.on || (shape.waist.length >= 8 && shape.hip.length >= 8)) return;
     if (!state.forceShape && (!calib.locked || !m.upper || Math.abs(state.yaw || 0) > 0.3)) return;
     lastShape = now; shape.tries++;
     try {
@@ -1077,6 +1215,7 @@ class OneEuro {
     const row = SIZE_CHART.find((r) => r.id === state.sizeId), pr = shapeProfile(null), rep = fitReport(row, pr);
     const parts = rep.map((z) => z.zone + " " + z.verdict + (z.verdict === "too tight" ? " (" + fmt(-z.spare, 0) + " cm short)" : ""));
     const missing = pr.waist == null || pr.hip == null;
+    if (pr.measured) return parts.join(", ") + ". Measured all round from your turn, over current clothing.";
     return parts.join(", ") + (missing ? ". Waist and hips not measured yet: face the camera with arms held slightly away from the body." : ". Measured over current clothing; depth is assumed.");
   }
 
@@ -1086,6 +1225,9 @@ class OneEuro {
     const now = calib.exact ? "exact" : calib.locked ? "approx" : "";
     if (now !== lockState) { lockState = now; if (now && navigator.vibrate) navigator.vibrate(now === "exact" ? [40, 60, 40] : 40); }
     let text = "";
+    if (turn.on) { const pg = shaper === "loading" || !shaper ? null : turnProgress(); text = pg ? `Arms slightly away from your body. Turn slowly in a full circle. Front views ${Math.min(5, pg.front)}/5, side views ${Math.min(5, pg.side)}/5.` : "Getting ready to measure."; }
+    else if (turn.msg) text = turn.msg;
+    else
     if (state.running && state.mode === "true" && !calib.exact) {
       if (calib.needsFullHeight) text = "The quick estimate is not reliable for this wearer. Step back once so head and feet show.";
       else if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
@@ -1174,7 +1316,9 @@ class OneEuro {
       const t0 = performance.now();
       let res = null;
       grabPicture();
-      try { res = landmarker.detectForVideo(v, t0); } catch (e) { console.error(e); }
+      const measuring = turn.on && shaper && shaper !== "loading";    // during a turn, the outline tracker does both jobs
+      try { res = (measuring ? shaper : landmarker).detectForVideo(v, t0); } catch (e) { console.error(e); }
+      if (measuring) captureTurn(res, t0);
       const t1 = performance.now();
       state.inferMs += 0.15 * (t1 - t0 - state.inferMs);
       if (state._lastTick) state.fps += 0.15 * (1000 / Math.max(1, t0 - state._lastTick) - state.fps);
@@ -1284,7 +1428,8 @@ class OneEuro {
     el.meter.style.whiteSpace = "pre";
     if (calib.locked) {
       const pr = shapeProfile(null), wd = (x) => (x == null ? "--" : fmt(2 * x, 0));
-      el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
+      const row = SIZE_CHART.find((r) => r.id === state.sizeId), around = pr && pr.measured ? fitReport(row, pr).map((z) => `${z.zone} ${fmt(z.girth, 0)}`).join(", ") : "";
+      el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (around ? `; around: ${around} cm` : pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
     }
     el.factFit.textContent = fitText();
     if (!el.probe.hidden) renderProbe();
@@ -1363,7 +1508,8 @@ class OneEuro {
   });
   $("openProbe").addEventListener("click", () => { el.probe.hidden = false; renderProbe(); });
   $("closeProbe").addEventListener("click", () => { el.probe.hidden = true; });
-  $("resetScale").addEventListener("click", resetScale);
+  $("resetScale").addEventListener("click", () => { clearTurn(); resetScale(); });
+  $("turnBtn").addEventListener("click", startTurn); setTurnButton();
   for (const b of document.querySelectorAll("#patterns [data-pattern]")) b.addEventListener("click", () => selectPattern(b.dataset.pattern));
   $("printBtn").addEventListener("click", () => { if (printTex) setPrint(null); else if (!THREE) showError("Start the camera first, then add a print."); else $("printFile").click(); });
   $("printFile").addEventListener("change", (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) { clearError(); setPrint(f); } });
