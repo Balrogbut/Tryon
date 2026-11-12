@@ -465,35 +465,35 @@ function torsoTube(spec, nr, ny, body) {
   return { pos, nrm, g, uv };
 }
 
-// Sleeve as a tube sewn to the armhole. Its first ring is the armhole itself, so the two pieces always meet.
-// From there the tube closes in on the wearer's own upper arm (the line from the shoulder point along d),
-// so the sleeve hangs on the arm instead of sticking out. yaw is how far the torso has turned.
+// Sleeve as a tube sewn to the armhole. Each ring is set by two points: one on the sleeve's top edge and one on
+// its underarm seam. The underarm seam runs straight from the underarm point to the sleeve end, as a sewn seam does,
+// so the underside cannot sag or pinch when the arm is raised. The top edge curves over the shoulder onto the arm.
+// d is the arm direction in the picture plane; yaw is how far the torso has turned.
 function sleeveTube(spec, side, d, yaw, na, nr, body) {
   body = body || defaultBody(spec);
   const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3), uv = new Float32Array(cols * na * 2);
   const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
-  const { top, pit } = armhole(spec, body, side);
-  const c0 = mid(top, pit), half = len(sub(pit, top)) / 2, down = norm(sub(pit, top));
+  const ah = armhole(spec, body, side);
+  const c0 = mid(ah.top, ah.pit), half = len(sub(ah.pit, ah.top)) / 2, down = norm(sub(ah.pit, ah.top));
   let n0 = { x: side * down.y * cyaw, y: -side * down.x };          // outward from the armhole, as seen after the turn
   n0 = len(n0) < 0.2 ? d : norm(n0);
-  const start = sub({ x: c0.x * cyaw, y: c0.y }, mul(n0, 1.5));      // start 1.5 cm inside the body so no gap can open
+  const inset = mul(n0, 1.5);                                        // start 1.5 cm inside the body so no gap can open
+  const top = sub({ x: ah.top.x * cyaw, y: ah.top.y }, inset), pit = sub({ x: ah.pit.x * cyaw, y: ah.pit.y }, inset);
   const J = { x: side * body.jHalf * cyaw, y: body.lift };           // the wearer's shoulder point
-  const lead = len(add(n0, d)) < 0.3 ? d : norm(add(n0, d));
-  const L = spec.sleeve * 0.95 + 1.5, s0 = Math.max(0, dot(sub(start, J), d));
-  const centre = (a) => {
-    const w = smooth(0.05, 0.55, a), pa = add(start, mul(lead, L * a)), pb = add(J, mul(d, s0 + L * a));
-    return { x: pa.x + (pb.x - pa.x) * w, y: pa.y + (pb.y - pa.y) * w };
-  };
-  const cz = -c0.x * syaw, r1 = 0.5 * spec.sleeveOpen, rz0 = 0.6 * half;
+  const under = { x: -d.y * side, y: d.x * side };                   // the arm's underside: faces the body with the arm down, the floor with it out
+  const r1 = 0.5 * spec.sleeveOpen, rz0 = 0.6 * half, L = spec.sleeve * 0.95 + 1.5;
+  const s0 = Math.max(0, dot(sub(mid(top, pit), J), d));
+  const end = add(J, mul(d, s0 + L)), endTop = sub(end, mul(under, r1)), endUnder = add(end, mul(under, r1));
+  const cap = sub(add(J, mul(d, s0)), mul(under, r1 + 1));           // where the top edge turns from the shoulder onto the arm
   for (let j = 0; j < na; j++) {
-    const a = j / (na - 1), c = centre(a);
-    const t = j === 0 ? n0 : norm(sub(centre(Math.min(1, a + 0.06)), centre(Math.max(0, a - 0.06))));
-    const e1 = { x: -t.y * side, y: t.x * side };                    // across the sleeve, pointing to its underside
-    const ta = 1 - (1 - a) * (1 - a) * (1 - a);                      // narrows quickly after the armhole, as a real sleeve does
-    const r = half + (r1 - half) * ta, rz = rz0 + (r1 - rz0) * ta;
+    const a = j / (na - 1), b = 1 - a;
+    const T = { x: b * b * top.x + 2 * a * b * cap.x + a * a * endTop.x, y: b * b * top.y + 2 * a * b * cap.y + a * a * endTop.y };
+    const B = { x: pit.x + (endUnder.x - pit.x) * a, y: pit.y + (endUnder.y - pit.y) * a };
+    const c = mid(T, B), r = Math.max(0.5, len(sub(B, T)) / 2), e1 = norm(sub(B, T));
+    const ta = 1 - b * b * b, rz = rz0 + (r1 - rz0) * ta;
     for (let i = 0; i < cols; i++) {
       const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
-      pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = cz + rz * sn;
+      pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = -c0.x * syaw + rz * sn;
       const nx = e1.x * co * rz, ny = e1.y * co * rz, nz = sn * r, nl = Math.hypot(nx, ny, nz) || 1;
       nrm[n] = nx / nl; nrm[n + 1] = ny / nl; nrm[n + 2] = nz / nl;
       g[n] = co; g[n + 1] = a; g[n + 2] = 1;
@@ -576,7 +576,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "12 (shoulders cover the wearer, slimmer sleeves)";
+  const BUILD = "13 (straight underarm seam, no dent)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
