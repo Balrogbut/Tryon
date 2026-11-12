@@ -268,11 +268,13 @@ const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 
 const EYE_HEEL_RATIO = 0.92;   // eye-to-heel distance as a share of standing height
 const WORN_WIDTH = 0.75;       // a flat width W wraps a body as a tube of girth 2W, which looks about 0.75 W wide from the front
 const TUBE = 2 / Math.PI;      // a sleeve opening of flat width W is a tube about 0.64 W across
-const SEAM_OVER_JOINTS = 1.28; // shoulder seam width of a well-fitting tee relative to the tracked shoulder-joint distance
+const SEAM_OVER_JOINTS = 1.15; // shoulder seam width of a well-fitting tee relative to the tracked shoulder-point distance
+const LIFT = 0.17;             // base of the neck above the line between the tracked shoulder points, as a share of their distance
 
 function garmentSpec(row) {
   return {
     id: row.id,
+    shoulder: row.shoulder,
     shHalf: row.shoulder / 2,
     chHalf: (row.chest * WORN_WIDTH) / 2,
     length: row.length,
@@ -405,7 +407,28 @@ function armDir(m, axes, side) {
 
 // Torso as a tube in garment centimetres: x across, y down, z towards the camera.
 // Origin is the centre of the neckline at the high shoulder point. Returns positions and outward normals.
-function torsoTube(spec, nr, ny) {
+// The wearer's shoulders in garment centimetres: half the distance between the tracked shoulder points,
+// and how far those points sit below the base of the neck (where the garment's top edge starts).
+function bodyShape(jHalf) { return { jHalf, lift: LIFT * 2 * jHalf }; }
+function defaultBody(spec) { return bodyShape(spec.shHalf / SEAM_OVER_JOINTS); }
+
+// Height of the garment's top edge at distance ax from the centre line. The cloth rests on the wearer:
+// it slopes from the neck down to the shoulder point, then rounds over the shoulder and falls with the arm.
+function shoulderLine(spec, body, ax) {
+  if (ax <= spec.neckHalf) return 0;
+  const tipX = Math.max(body.jHalf, spec.neckHalf + 4), tipY = Math.max(1.5, body.lift - 1.5), R = 6;
+  if (ax <= tipX) return (tipY * (ax - spec.neckHalf)) / (tipX - spec.neckHalf);
+  const o = Math.min(ax - tipX, R * 0.97);
+  return tipY + R - Math.sqrt(R * R - o * o);
+}
+// Where the sleeve is sewn on: shoulder point and underarm point, on the wearer's left for side = 1.
+function armhole(spec, body, side) {
+  const y = shoulderLine(spec, body, spec.shHalf);
+  return { top: { x: side * spec.shHalf, y }, pit: { x: side * spec.chHalf, y: Math.max(spec.armhole, y + 10) } };
+}
+
+function torsoTube(spec, nr, ny, body) {
+  body = body || defaultBody(spec);
   const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3), uv = new Float32Array(cols * ny * 2);
   const hemY = spec.length - spec.hemCurve, ta = spec.armhole / spec.length;
   for (let j = 0; j < ny; j++) {
@@ -415,7 +438,7 @@ function torsoTube(spec, nr, ny) {
     for (let i = 0; i < cols; i++) {
       const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi);
       const ax = Math.abs(sx) * spec.shHalf;
-      const yTop = ax <= spec.neckHalf ? 0 : (spec.drop * (ax - spec.neckHalf)) / (spec.shHalf - spec.neckHalf);
+      const yTop = shoulderLine(spec, body, ax);
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = sx / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
       pos[n] = hw * sx; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
@@ -428,23 +451,29 @@ function torsoTube(spec, nr, ny) {
   return { pos, nrm, g, uv };
 }
 
-// Sleeve as a tube sewn to the armhole. Its first ring is the armhole itself, running from the shoulder point
-// to the underarm point on the side of the torso, so the two pieces always meet. From there the tube bends
-// towards the arm direction d (in the picture plane). yaw is how far the torso has turned.
-function sleeveTube(spec, side, d, yaw, na, nr) {
+// Sleeve as a tube sewn to the armhole. Its first ring is the armhole itself, so the two pieces always meet.
+// From there the tube closes in on the wearer's own upper arm (the line from the shoulder point along d),
+// so the sleeve hangs on the arm instead of sticking out. yaw is how far the torso has turned.
+function sleeveTube(spec, side, d, yaw, na, nr, body) {
+  body = body || defaultBody(spec);
   const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3), uv = new Float32Array(cols * na * 2);
   const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
-  const top = { x: side * spec.shHalf, y: spec.drop }, pit = { x: side * spec.chHalf, y: spec.armhole };
+  const { top, pit } = armhole(spec, body, side);
   const c0 = mid(top, pit), half = len(sub(pit, top)) / 2, down = norm(sub(pit, top));
   let n0 = { x: side * down.y * cyaw, y: -side * down.x };          // outward from the armhole, as seen after the turn
   n0 = len(n0) < 0.2 ? d : norm(n0);
-  let c = sub({ x: c0.x * cyaw, y: c0.y }, mul(n0, 1.5));            // start 1.5 cm inside the body so no gap can open
-  const cz = -c0.x * syaw, step = (spec.sleeve * 0.95 + 1.5) / (na - 1);
-  const r1 = 0.5 * spec.sleeveOpen, rz0 = 0.8 * half;
+  const start = sub({ x: c0.x * cyaw, y: c0.y }, mul(n0, 1.5));      // start 1.5 cm inside the body so no gap can open
+  const J = { x: side * body.jHalf * cyaw, y: body.lift };           // the wearer's shoulder point
+  const lead = len(add(n0, d)) < 0.3 ? d : norm(add(n0, d));
+  const L = spec.sleeve * 0.95 + 1.5, s0 = Math.max(0, dot(sub(start, J), d));
+  const centre = (a) => {
+    const w = smooth(0.05, 0.55, a), pa = add(start, mul(lead, L * a)), pb = add(J, mul(d, s0 + L * a));
+    return { x: pa.x + (pb.x - pa.x) * w, y: pa.y + (pb.y - pa.y) * w };
+  };
+  const cz = -c0.x * syaw, r1 = 0.5 * spec.sleeveOpen, rz0 = 0.8 * half;
   for (let j = 0; j < na; j++) {
-    const a = j / (na - 1), w = smooth(0, 0.6, a);
-    const t = norm({ x: n0.x + (d.x - n0.x) * w, y: n0.y + (d.y - n0.y) * w });
-    if (j > 0) c = add(c, mul(t, step));
+    const a = j / (na - 1), c = centre(a);
+    const t = j === 0 ? n0 : norm(sub(centre(Math.min(1, a + 0.06)), centre(Math.max(0, a - 0.06))));
     const e1 = { x: -t.y * side, y: t.x * side };                    // across the sleeve, pointing to its underside
     const r = half + (r1 - half) * a, rz = rz0 + (r1 - rz0) * a;
     for (let i = 0; i < cols; i++) {
@@ -474,7 +503,7 @@ function occluders(lm, world, vw, vh, m, sleevePx) {
   out.push([earMid.x, earMid.y, crown.x, crown.y, 10 * u, 10 * u, 1, 0]);
   if (!world) return out;
   const torsoZ = (world[LM.SH_L].z + world[LM.SH_R].z + world[LM.HIP_L].z + world[LM.HIP_R].z) / 4;
-  const front = (z) => smooth(0.05, 0.15, torsoZ - z);          // metres in front of the shoulder-hip plane
+  const front = (z) => smooth(0.03, 0.08, torsoZ - z);          // metres in front of the shoulder-hip plane
   for (const [sh, el, wr, ix] of [[LM.SH_L, LM.EL_L, LM.WR_L, LM.IDX_L], [LM.SH_R, LM.EL_R, LM.WR_R, LM.IDX_R]]) {
     if (vis(el) < 0.5) continue;
     const S = P(sh), E = P(el);
@@ -677,7 +706,7 @@ class OneEuro {
           gl_Position = projectionMatrix * vec4(scr, p.z * 0.04, 1.0);
         }`,
       fragmentShader: `
-        precision mediump float;
+        precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
         uniform float pattern; uniform float loose; uniform float tight;
@@ -764,7 +793,7 @@ class OneEuro {
     for (const [name, arr] of [["position", tube.pos], ["normal", tube.nrm], ["uv", tube.uv]]) { const at = meshObj.geometry.getAttribute(name); at.array.set(arr); at.needsUpdate = true; }
   }
   function setTorso() {
-    setTube(torso, torsoTube(spec, NR, NY));
+    torsoBody = null; setTube(torso, torsoTube(spec, NR, NY));
     torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 0.22 * spec.neckDrop);
     applyPrint();
   }
@@ -802,6 +831,7 @@ class OneEuro {
     meshObj.visible = true;
   }
   // Secondary motion: the hem and the sleeve ends trail the body and swing back, as hanging cloth does.
+  let torsoBody = null;
   const swing = { p: null, vx: 0, vy: 0, yaw: null, yawV: 0, arm: [null, null], armV: [0, 0] };
   function resetSwing() { swing.p = null; swing.yaw = null; swing.arm = [null, null]; swing.vx = swing.vy = swing.yawV = 0; swing.armV = [0, 0]; }
   function drawGarment(m, map, ppcScreen, ghost, yaw, yawHipIn, occ, dt) {
@@ -809,7 +839,9 @@ class OneEuro {
     const ms = { ...m, L: S(m.L), R: S(m.R), sMid: S(m.sMid), hMid: S(m.hMid), hipL: S(m.hipL), hipR: S(m.hipR), elbowL: m.elbowL && S(m.elbowL), elbowR: m.elbowR && S(m.elbowR) };
     const axes = garmentAxes(ms), fr = bodyFrames(m, axes);
     // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
-    const lift = 0.2 * effectiveShoulderPx(m) * map.s;
+    const lift = LIFT * effectiveShoulderPx(m) * map.s;
+    const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, body = bodyShape(jHalf);
+    if (jHalf !== torsoBody) { torsoBody = jHalf; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
     const O = sub(ms.sMid, mul(axes.v, lift));
     const hipY = m.hipsOk ? (m.torsoPx * map.s + lift) / ppcScreen : 1e4;
     const clamp = (x, a) => Math.max(-a, Math.min(a, x));
@@ -838,7 +870,7 @@ class OneEuro {
       swing.arm[i] = target + wrap(swing.arm[i] - target);
       [swing.arm[i], swing.armV[i]] = springStep(swing.arm[i], swing.armV[i], target, 3.0, 0.45, dt);
       const ang = target + clamp(swing.arm[i] - target, 0.35);
-      setTube(meshObj, sleeveTube(spec, side, { x: Math.cos(ang), y: Math.sin(ang) }, yaw, NA, NS));
+      setTube(meshObj, sleeveTube(spec, side, { x: Math.cos(ang), y: Math.sin(ang) }, yaw, NA, NS, body));
       aim(meshObj, O, fr.uTop, fr.uTop, axes.v, ppcScreen, 0, 0, 1, ghost);
       meshObj.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
     });
@@ -1000,6 +1032,7 @@ class OneEuro {
     pose.target = lm; pose.world = w || null;
     // Ease: garment shoulder width against the wearer's. Above 1 the shirt is loose, below 1 it pulls.
     state.ease = state.mode === "true" && calib.locked ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
+    if (!Number.isFinite(state.ease)) state.ease = 1.08;
     calib.add(m, state.heightCm);
     sampleLight(now);
     const ppc = calib.ppc(m);
