@@ -65,6 +65,23 @@ button { cursor: pointer; }
 }
 
 .hint { position: absolute; left: var(--gutter-l); right: var(--gutter-r); top: calc(58px + env(safe-area-inset-top, 0px)); pointer-events: none; display: flex; }
+.measure { position: absolute; left: var(--gutter-l); right: var(--gutter-r); top: calc(58px + env(safe-area-inset-top, 0px)); display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: rgba(16, 20, 27, .9); }
+.measure-text { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.measure-text strong { font: 700 16px/1.25 var(--ui); }
+.measure-text span { font-size: 13px; color: var(--muted); }
+.measure-bars { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin-top: 4px; font: 11px/1 var(--data); color: var(--muted); }
+.measure-bars i { display: block; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.measure-bars b { display: block; height: 100%; width: 0; background: var(--tape); }
+.turn-fig { flex: none; width: 46px; height: 56px; fill: var(--chalk); }
+.turn-fig .turn-arrow { fill: none; stroke: var(--tape); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.turn-fig .turn-body { transform-origin: 24px 30px; }
+@media (prefers-reduced-motion: no-preference) { .turn-fig .turn-body { animation: turning 2.6s ease-in-out infinite; } }
+@keyframes turning { 0%, 100% { transform: scaleX(1); } 25% { transform: scaleX(.3); } 50% { transform: scaleX(1); } 75% { transform: scaleX(.3); } }
+.measure.result { align-items: flex-start; }
+.measure.result .btn { flex: none; }
+.sizechip { position: absolute; right: var(--gutter-r); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 62%; padding: 6px 10px; border-radius: 8px; background: var(--tape); color: var(--tape-ink); font: 700 13px/1.25 var(--ui); text-align: right; }
+.chip.suggested { box-shadow: inset 0 -3px 0 var(--ok); }
+.stage.measuring #sheetBody { display: none !important; }
 .hint span { padding: 6px 11px; border-radius: 8px; background: rgba(16, 20, 27, .78); border: 1px solid var(--line); font-size: 13px; line-height: 1.3; max-width: 34ch; }
 .sheet {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 10px;
@@ -142,6 +159,19 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
   <div class="tape" id="tape" hidden><div class="tape-bar" id="tapeBar"></div><span>10 cm at the wearer</span></div>
 
   <div class="hint" id="hint" hidden><span id="hintText"></span></div>
+  <div class="sizechip" id="sizeChip" hidden></div>
+  <div class="measure" id="measure" hidden role="status">
+    <svg class="turn-fig" viewBox="0 0 48 60" aria-hidden="true"><g class="turn-body"><circle cx="24" cy="8" r="6"/><path d="M11 22c0-4 5-6 13-6s13 2 13 6v15h-5v16h-6V40h-4v13h-6V37h-5z"/></g><path class="turn-arrow" d="M7 54c5 5 29 5 34 0"/><path class="turn-arrow" d="M41 54l-6 0m6 0l-2-5"/></svg>
+    <div class="measure-text">
+      <strong id="measureTitle">Turn slowly in a full circle</strong>
+      <span id="measureSub">Keep your arms slightly away from your body</span>
+      <div class="measure-bars"><span>Front</span><i><b id="barFront"></b></i><span>Side</span><i><b id="barSide"></b></i></div>
+    </div>
+  </div>
+  <div class="measure result" id="result" hidden role="status">
+    <div class="measure-text"><strong id="resultTitle"></strong><span id="resultBody"></span></div>
+    <button class="btn" id="resultOk" type="button">OK</button>
+  </div>
 
   <section class="sheet" id="sheet" aria-label="Garment controls">
     <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true">Hide controls</button>
@@ -613,23 +643,23 @@ function occluders(lm, world, vw, vh, m, sleevePx) {
   const earMid = m.earMid, hd = m.headPx / 0.42;               // head width; sized from the head itself, since a child's head is large for their shoulders
   const up = norm(sub(earMid, m.sMid));
   const neckBase = add(m.sMid, mul(up, 4 * u)), chin = sub(earMid, mul(up, 0.25 * hd)), crown = add(earMid, mul(up, 0.35 * hd));
-  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 0.36 * hd, 0.38 * hd, 1, 0]);
-  out.push([chin.x, chin.y, crown.x, crown.y, 0.7 * hd, 0.7 * hd, 1, 0]);
+  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 0.36 * hd, 0.38 * hd, 1, 0, 0]);
+  out.push([chin.x, chin.y, crown.x, crown.y, 0.7 * hd, 0.7 * hd, 1, 0, 1]);
   if (!world) return out;
   const torsoZ = (world[LM.SH_L].z + world[LM.SH_R].z + world[LM.HIP_L].z + world[LM.HIP_R].z) / 4;
-  const front = (z) => smooth(0.03, 0.08, torsoZ - z);          // metres in front of the shoulder-hip plane
-  for (const [sh, el, wr, ix] of [[LM.SH_L, LM.EL_L, LM.WR_L, LM.IDX_L], [LM.SH_R, LM.EL_R, LM.WR_R, LM.IDX_R]]) {
+  const front = (z) => smooth(0.06, 0.12, torsoZ - z);          // metres in front of the shoulder-hip plane
+  for (const [sh, el, wr, ix, slot] of [[LM.SH_L, LM.EL_L, LM.WR_L, LM.IDX_L, 2], [LM.SH_R, LM.EL_R, LM.WR_R, LM.IDX_R, 5]]) {
     if (vis(el) < 0.5) continue;
     const S = P(sh), E = P(el);
     const armLen = len(sub(E, S));
     if (armLen > sleevePx * 1.05) {                             // bare upper arm below the sleeve, over the body of the shirt only
       const a = add(S, mul(norm(sub(E, S)), sleevePx));
-      out.push([a.x, a.y, E.x, E.y, 5.2 * u, 4.6 * u, front((world[sh].z + world[el].z) / 2), 1]);
+      out.push([a.x, a.y, E.x, E.y, 5.2 * u, 4.6 * u, front((world[sh].z + world[el].z) / 2), 1, slot]);
     }
     if (vis(wr) < 0.5) continue;
     const W = P(wr), tip = add(W, mul(sub(P(ix), W), 1.6));
-    out.push([E.x, E.y, W.x, W.y, 4.6 * u, 3.4 * u, front((world[el].z + world[wr].z) / 2), 0]);
-    out.push([W.x, W.y, tip.x, tip.y, 3.8 * u, 4.4 * u, front(world[wr].z), 0]);
+    out.push([E.x, E.y, W.x, W.y, 4.6 * u, 3.4 * u, front((world[el].z + world[wr].z) / 2), 0, slot + 1]);
+    out.push([W.x, W.y, tip.x, tip.y, 3.8 * u, 4.4 * u, front(world[wr].z), 0, slot + 2]);
   }
   return out;
 }
@@ -641,6 +671,18 @@ function gridIndex(nx, ny) {
     idx.push(a, c, b, b, c, e);
   }
   return idx;
+}
+
+// How far the wearer has turned, from how narrow the shoulders look. ratio is apparent shoulder width over
+// torso length, widest is the largest that ratio has been (facing the camera). Returns 0 facing the camera
+// (front or back) up to 90 degrees side-on. Depth estimates are not used for the amount, only (elsewhere) for the side.
+function turnAmount(ratio, widest) { return Math.acos(Math.min(1, Math.max(0, ratio / Math.max(1e-6, widest) / 0.96))); }
+
+// Smallest size in the chart that is not too tight anywhere. If none, the largest, with the zones that are short.
+function recommendSize(pr) {
+  let last = null;
+  for (const row of SIZE_CHART) { const rep = fitReport(row, pr); if (!rep.length) return null; last = { id: row.id, report: rep, short: rep.filter((z) => z.spare < 0) }; if (!last.short.length) return last; }
+  return last;
 }
 
 // A point that follows a target like something hanging from it: it lags, overshoots a little and settles.
@@ -675,14 +717,14 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "16 (measure by turning: chest, waist and hips all round)";
+  const BUILD = "17 (steady while turning, on-screen measuring guide and size)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
   const $ = (id) => document.getElementById(id);
   const el = {
     view: $("view"), video: $("cam"), canvas: $("gl"), pill: $("pill"), pillText: $("pillText"), meter: $("meter"),
-    stage: $("stage"), hint: $("hint"), hintText: $("hintText"), tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
+    stage: $("stage"), hint: $("hint"), hintText: $("hintText"), measure: $("measure"), result: $("result"), sizeChip: $("sizeChip"), tape: $("tape"), tapeBar: $("tapeBar"), sheet: $("sheet"), sheetBody: $("sheetBody"), sheetToggle: $("sheetToggle"),
     sizes: $("sizes"), swatches: $("swatches"), height: $("height"), height0: $("height0"),
     factGarment: $("factGarment"), factBody: $("factBody"), factFit: $("factFit"), modeTrue: $("modeTrue"), modeFit: $("modeFit"),
     probe: $("probe"), start: $("start"), error: $("error"), fov: $("fov"), devices: $("devices"), pDump: $("pDump"),
@@ -790,7 +832,7 @@ class OneEuro {
     if (from !== el.height) el.height.value = n;
     if (from !== el.height0) el.height0.value = n;
   }
-  function resetScale() { calib.reset(); ppcSmooth = null; state.ppcVideo = null; el.factBody.textContent = "Not measured yet"; if (el.factFit) resetShape(); }
+  function resetScale() { calib.reset(); ppcSmooth = null; state.ppcVideo = null; widest.sh = widest.hip = 0; el.factBody.textContent = "Not measured yet"; if (el.factFit) resetShape(); }
 
   /* ----- graphics ----- */
   function makeMaterial() {
@@ -803,18 +845,19 @@ class OneEuro {
         grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
-        k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
+        k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, back: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
       },
       vertexShader: `
-        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway; attribute float fit;
+        attribute vec3 g; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway; uniform float back; attribute float fit;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
         void main() {
           float w = smoothstep(0.0, hipY, position.y);     // 0 at the shoulders, 1 from the hips down
           vec2 Ux = normalize(mix(U, U2, w));               // across the body: shoulder line at the top, hip line at the hem
           float yw = mix(yaw, yaw2, w);                     // twist: shoulders and hips can face different ways
           float c = cos(yw), s = sin(yw);
-          vec3 p = vec3(position.x * c + position.z * s, position.y, -position.x * s + position.z * c);
-          vN = vec3(normal.x * c + normal.z * s, normal.y, -normal.x * s + normal.z * c);
+          float fb = 1.0 - 2.0 * back;                       // seen from behind, the garment's back faces the camera
+          vec3 p = vec3(position.x * c + position.z * fb * s, position.y, -position.x * s + position.z * fb * c);
+          vN = vec3(normal.x * c + normal.z * fb * s, normal.y, -normal.x * s + normal.z * fb * c);
           vG = g; vP = position; vUv = uv; vFit = fit;
           float sw = smoothstep(sway.z, sway.w, position.y); sw *= sw;   // free cloth below the underarm swings, most at the hem
           vec2 scr = O + ((p.x + sway.x * sw) * Ux + (p.y + sway.y * sw) * V) * k; vScr = scr;
@@ -884,7 +927,7 @@ class OneEuro {
           float fold = cos(vUv.x * 0.42 + 1.4 * sin(vUv.y * 0.08)) * 0.6 + cos(vUv.x * 0.9 - vUv.y * 0.05 + 2.0) * 0.4;
           float pull = cos(vUv.y * 1.1 + 0.8 * sin(vUv.x * 0.16));
           float looseL = smoothstep(0.0, 0.2, -vFit), tightL = smoothstep(0.0, 0.1, vFit);   // per zone: chest, waist and hips can differ
-          float relief = isTorso > 0.5 ? (0.035 + 0.11 * looseL) * fold * below + 0.1 * tightL * pull : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
+          float relief = isTorso > 0.5 ? (0.035 + 0.11 * looseL) * fold * below + 0.05 * tightL * pull * (0.5 + 0.5 * noise(vUv * 0.15)) : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
@@ -983,7 +1026,8 @@ class OneEuro {
     const axes = garmentAxes(ms), fr = bodyFrames(m, axes);
     // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
     const lift = neckLift(m, axes.v) * map.s;
-    const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
+    // With the scale set, the wearer's shoulder width is known and does not change as they turn.
+    const jHalf = state.mode === "true" && calib.locked ? Math.round(calib.shoulderCm * 2) / 4 : Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
     body.profile = shapeProfile(liftCm); body.fitDefault = Math.round((1 / state.ease - 1) * 40) / 40;
     const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + JSON.stringify(body.profile, (k, x) => (typeof x === "number" ? Math.round(x * 2) / 2 : x));
     if (bodyKey !== torsoBody) { torsoBody = bodyKey; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
@@ -1008,6 +1052,7 @@ class OneEuro {
     const yawHip = yaw + clamp(wrap(swing.yaw - yaw), 0.8);
 
     aim(torso, O, fr.uTop, fr.uHip, axes.v, ppcScreen, yaw, yawHip, hipY, ghost);
+    torso.material.uniforms.back.value = state.back ? 1 : 0;
     torso.material.uniforms.sway.value.set(swayX, swayY, spec.armhole, spec.length);
     [[sleeveL, 1], [sleeveR, -1]].forEach(([meshObj, side], i) => {
       const d = armDir(ms, { u: fr.uTop, v: axes.v }, side), target = Math.atan2(d.y, d.x);
@@ -1101,7 +1146,18 @@ class OneEuro {
     if (!shaper) { shaper = "loading"; makeTracker(true).then((t) => { shaper = t; }).catch((e) => { console.error(e); shaperFailed = true; turn.on = false; setTurnButton(); }); }
     setTurnButton();
   }
-  function setTurnButton() { $("turnBtn").textContent = turn.on ? "Stop measuring" : state.turnProfile ? "Measure again: one slow turn" : "Measure me: one slow turn"; }
+  function setTurnButton() {
+    const b = $("turnBtn"); b.textContent = turn.on ? "Stop measuring" : state.turnProfile ? "Measure again: one slow turn" : "Measure me: one slow turn";
+    b.classList.toggle("primary", !turn.on && !state.turnProfile);
+  }
+  function showResult(title, body) { $("resultTitle").textContent = title; $("resultBody").textContent = body; el.result.hidden = false; }
+  function measuredSummary() {
+    const pr = shapeProfile(null); if (!pr || !pr.measured) return null;
+    const rec = recommendSize(pr), g = Object.fromEntries(rec.report.map((z) => [z.zone, z.girth]));
+    const sizes = ["chest", "waist", "hips"].filter((z) => g[z] != null).map((z) => `${z[0].toUpperCase() + z.slice(1)} ${fmt(g[z], 0)} cm`).join(" · ");
+    const note = rec.short.length ? `No size in this chart goes round the ${rec.short.map((z) => z.zone).join(" and ")}; ${rec.id} is the closest, ${rec.short.map((z) => fmt(-z.spare, 0) + " cm short at the " + z.zone).join(", ")}.` : `Suggested size: ${rec.id}.`;
+    return { rec, sizes, note };
+  }
   // One reading of the outline at every zone, tagged with how wide the shoulders and hips look right now.
   // Shoulders and hips look narrower as the wearer turns, and that narrowing is what gives the angle.
   function captureTurn(res, now) {
@@ -1165,9 +1221,10 @@ class OneEuro {
     }
     if (zones.bust && (zones.waist || zones.hip)) {
       state.turnProfile = { height: state.heightCm, zones, at: Date.now() }; store.set("turn", JSON.stringify(state.turnProfile));
-      turn.msg = "Measured. The fit line now uses your own shape."; if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
-    } else turn.msg = "Could not see both a front and a side view. Try again: arms slightly away, one slow full turn, more light if you can.";
-    setTimeout(() => { turn.msg = ""; }, 6000); setTurnButton();
+      if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
+      const sm = measuredSummary(); if (sm) showResult("Measured: " + sm.sizes, sm.note + " Measured over current clothing.");
+    } else showResult("Not enough was seen to measure", "A front view and a side view are both needed. Try again: arms slightly away from your body, one slow full turn, and more light if you can.");
+    setTurnButton();
   }
   state.finishTurn = finishTurn; state.startTurn = startTurn;
   // Reads the body outline at waist and hip level. Runs only while facing the camera, at most ~twice a second,
@@ -1225,7 +1282,14 @@ class OneEuro {
     const now = calib.exact ? "exact" : calib.locked ? "approx" : "";
     if (now !== lockState) { lockState = now; if (now && navigator.vibrate) navigator.vibrate(now === "exact" ? [40, 60, 40] : 40); }
     let text = "";
-    if (turn.on) { const pg = shaper === "loading" || !shaper ? null : turnProgress(); text = pg ? `Arms slightly away from your body. Turn slowly in a full circle. Front views ${Math.min(5, pg.front)}/5, side views ${Math.min(5, pg.side)}/5.` : "Getting ready to measure."; }
+    el.measure.hidden = !turn.on; el.stage.classList.toggle("measuring", turn.on);
+    if (turn.on) {
+      el.result.hidden = true;
+      const pg0 = shaper === "loading" || !shaper ? null : turnProgress();
+      $("measureTitle").textContent = pg0 ? "Turn slowly in a full circle" : "Getting ready to measure";
+      $("barFront").style.width = (pg0 ? Math.min(1, pg0.front / 5) * 100 : 0) + "%"; $("barSide").style.width = (pg0 ? Math.min(1, pg0.side / 5) * 100 : 0) + "%";
+    }
+    if (turn.on) { text = ""; }
     else if (turn.msg) text = turn.msg;
     else
     if (state.running && state.mode === "true" && !calib.exact) {
@@ -1331,6 +1395,8 @@ class OneEuro {
 
   // The tracker reports roughly 18 times a second on a mid-range phone; the screen redraws up to 60 times a second.
   // onPose records what the tracker saw. frame() eases the drawn pose towards it on every redraw, so movement is smooth.
+  const widest = { sh: 0, hip: 0, sign: 1 };
+  const occSlots = Array.from({ length: 8 }, () => null);
   const pose = { target: null, world: null, lm: null, yaw: 0, yawHip: 0, ppc: null };
   function onPose(res, now) {
     const v = el.video, vw = v.videoWidth, vh = v.videoHeight;
@@ -1342,8 +1408,18 @@ class OneEuro {
     const m = bodyMetrics(lm, vw, vh);
     // How far the wearer has turned, from the depth difference between the two shoulders (0 = facing the camera).
     const w = res.worldLandmarks && res.worldLandmarks[0];
-    if (w) { const a = Math.atan2(w[LM.SH_L].z - w[LM.SH_R].z, w[LM.SH_L].x - w[LM.SH_R].x); state.yaw = Math.atan2(yawSin.filter(Math.sin(a), t), yawCos.filter(Math.cos(a), t));
-      const b = Math.atan2(w[LM.HIP_L].z - w[LM.HIP_R].z, w[LM.HIP_L].x - w[LM.HIP_R].x); state.yawHip = Math.atan2(hipSin.filter(Math.sin(b), t), hipCos.filter(Math.cos(b), t)); }
+    // How far the wearer has turned comes from how narrow the shoulders and hips look, which is steady.
+    // The tracker's depth estimate only decides which shoulder is nearer, and is ignored unless it is clear.
+    if (m.shouldersOk && m.torsoPx > 10) {
+      const rs = m.shoulderPx / m.torsoPx, rh = len(sub(m.hipL, m.hipR)) / m.torsoPx;
+      widest.sh = Math.max(widest.sh * 0.9998, rs); widest.hip = Math.max(widest.hip * 0.9998, rh);
+      if (w) { const dz = w[LM.SH_L].z - w[LM.SH_R].z; if (Math.abs(dz) > 0.04) widest.sign = dz > 0 ? 1 : -1; }
+      const a = widest.sign * turnAmount(rs, widest.sh), b = m.hipsOk ? widest.sign * turnAmount(rh, widest.hip) : a;
+      state.yaw = Math.atan2(yawSin.filter(Math.sin(a), t), yawCos.filter(Math.cos(a), t));
+      state.yawHip = Math.atan2(hipSin.filter(Math.sin(b), t), hipCos.filter(Math.cos(b), t));
+      const right = norm({ x: m.hMid.y - m.sMid.y, y: -(m.hMid.x - m.sMid.x) });      // image-right for an upright wearer
+      state.back = m.hipsOk ? dot(sub(m.L, m.R), right) < 0 : m.L.x < m.R.x;            // left shoulder on the left of the picture: seen from behind
+    }
     pose.target = lm; pose.world = w || null;
     // Ease: garment shoulder width against the wearer's. Above 1 the shirt is loose, below 1 it pulls.
     state.ease = state.mode === "true" && calib.locked ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
@@ -1385,7 +1461,15 @@ class OneEuro {
       const fitPpc = (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
       const trueSize = state.mode === "true" && pose.ppc;
       const usePpc = trueSize ? pose.ppc : fitPpc;
-      drawGarment(m, map, usePpc * map.s, false, pose.yaw, pose.yawHip, occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), dt);
+      // Body parts in front of the shirt fade in and out over a moment instead of switching, which removes flicker.
+      // Seen from behind, the arms cannot be in front of the shirt's back, so they are never cut out of it.
+      const found = occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), kOcc = 1 - Math.exp(-dt * 9);
+      for (let i = 0; i < 8; i++) {
+        const c = found.find((q) => q[8] === i), target = c ? (state.back && i >= 2 ? 0 : c[6]) : 0, prev = occSlots[i];
+        if (c) occSlots[i] = c.slice(0, 8).concat([i]), occSlots[i][6] = prev ? prev[6] + kOcc * (target - prev[6]) : i < 2 ? target : 0;
+        else if (prev) { prev[6] += kOcc * (0 - prev[6]); if (prev[6] < 0.02) occSlots[i] = null; }
+      }
+      drawGarment(m, map, usePpc * map.s, false, pose.yaw, pose.yawHip, occSlots, dt);
       if (state.mode === "fit") setPill("warn", "Fit to body: not to scale");
       else if (trueSize) setPill(calib.exact ? "ok" : "warn", calib.exact ? "True size, scale set" : "True size, approximate");
       else setPill("warn", "Fitted to body until measured");
@@ -1432,6 +1516,10 @@ class OneEuro {
       el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (around ? `; around: ${around} cm` : pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
     }
     el.factFit.textContent = fitText();
+    // Suggested size, shown on the picture and marked in the size row, once the wearer has been measured.
+    const sm = state.mode === "true" && calib.locked ? measuredSummary() : null, chipText = sm && el.result.hidden && !turn.on ? (sm.rec.short.length ? `Closest size ${sm.rec.id}: short at ${sm.rec.short.map((z) => z.zone).join(", ")}` : `Your size: ${sm.rec.id}`) : "";
+    if (el.sizeChip.textContent !== chipText) { el.sizeChip.textContent = chipText; el.sizeChip.hidden = !chipText; }
+    for (const b of el.sizes.querySelectorAll(".chip")) b.classList.toggle("suggested", !!sm && b.dataset.size === sm.rec.id);
     if (!el.probe.hidden) renderProbe();
   }
   function probeFacts() {
@@ -1470,7 +1558,7 @@ class OneEuro {
       "Distance from height + lens angle: " + p.dist + ` (height ${state.heightCm} cm, lens angle ${state.fovLong} deg)`,
       "Scale: " + p.scale,
       "Body shape: " + (shaperFailed ? "outline reading failed on this device" : `${shape.waist.length} waist and ${shape.hip.length} hip readings in ${shape.tries} tries`) + "; fit: " + fitText(),
-      "Turn: " + fmt(((state.yaw || 0) * 180) / Math.PI, 0) + " deg",
+      "Turn: " + fmt(((state.yaw || 0) * 180) / Math.PI, 0) + " deg" + (state.back ? ", seen from behind" : ""),
       "Tracking: " + p.speed + ", on " + p.delegate,
       "Settings: " + JSON.stringify(p.settings, null, 1),
       "Capabilities: " + (p.caps ? JSON.stringify(p.caps, null, 1) : "not available in this browser"),
@@ -1510,6 +1598,7 @@ class OneEuro {
   $("closeProbe").addEventListener("click", () => { el.probe.hidden = true; });
   $("resetScale").addEventListener("click", () => { clearTurn(); resetScale(); });
   $("turnBtn").addEventListener("click", startTurn); setTurnButton();
+  $("resultOk").addEventListener("click", () => { el.result.hidden = true; });
   for (const b of document.querySelectorAll("#patterns [data-pattern]")) b.addEventListener("click", () => selectPattern(b.dataset.pattern));
   $("printBtn").addEventListener("click", () => { if (printTex) setPrint(null); else if (!THREE) showError("Start the camera first, then add a print."); else $("printFile").click(); });
   $("printFile").addEventListener("change", (ev) => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) { clearError(); setPrint(f); } });
