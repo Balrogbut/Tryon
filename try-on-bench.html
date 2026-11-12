@@ -262,7 +262,7 @@ const SIZE_CHART = [
 ];
 
 // Pose landmark numbers used here (MediaPipe's 33-point body model).
-const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 23, HIP_R: 24, KNEE_L: 25, KNEE_R: 26, HEEL_L: 29, HEEL_R: 30, EAR_L: 7, EAR_R: 8, WR_L: 15, WR_R: 16, IDX_L: 19, IDX_R: 20 };
+const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 23, HIP_R: 24, KNEE_L: 25, KNEE_R: 26, HEEL_L: 29, HEEL_R: 30, EAR_L: 7, EAR_R: 8, MOUTH_L: 9, MOUTH_R: 10, WR_L: 15, WR_R: 16, IDX_L: 19, IDX_R: 20 };
 
 // Assumptions, all approximate and all worth replacing with measured values later.
 const EYE_HEEL_RATIO = 0.92;   // eye-to-heel distance as a share of standing height
@@ -344,6 +344,10 @@ function bodyMetrics(lm, vw, vh) {
     torsoPx: len(sub(hMid, sMid)),
     eyeHeelPx: len(sub(heelMid, eyeMid)),
     hipL: P(LM.HIP_L), hipR: P(LM.HIP_R),
+    // Head: eye-to-mouth distance does not change when the head turns, ear-to-ear distance does not change when it nods.
+    eyeMid, earMid: mid(P(LM.EAR_L), P(LM.EAR_R)),
+    headPx: Math.max(len(sub(mid(P(LM.MOUTH_L), P(LM.MOUTH_R)), eyeMid)), 0.42 * len(sub(P(LM.EAR_L), P(LM.EAR_R)))),
+    headOk: [LM.EYE_L, LM.EYE_R, LM.MOUTH_L, LM.MOUTH_R].every((i) => vis(i) > 0.5),
     elbowL: vis(LM.EL_L) > 0.4 ? P(LM.EL_L) : null,
     elbowR: vis(LM.EL_R) > 0.4 ? P(LM.EL_R) : null,
   };
@@ -409,14 +413,24 @@ function armDir(m, axes, side) {
 // Origin is the centre of the neckline at the high shoulder point. Returns positions and outward normals.
 // The wearer's shoulders in garment centimetres: half the distance between the tracked shoulder points,
 // and how far those points sit below the base of the neck (where the garment's top edge starts).
-function bodyShape(jHalf) { return { jHalf, lift: LIFT * 2 * jHalf }; }
+function bodyShape(jHalf, lift) { return { jHalf, lift: lift == null ? LIFT * 2 * jHalf : lift }; }
+
+// How far above the line between the shoulder points the collar sits, in video pixels (v points down the spine).
+// Normally that is a fixed share of the shoulder width. But raising the arms lifts the shoulder points towards
+// the ears while the neck stays put, so the collar is also held below the head: it never rides up over the chin.
+function neckLift(m, v) {
+  const eff = effectiveShoulderPx(m), byShoulders = LIFT * eff;
+  if (!m.headOk) return byShoulders;
+  const byHead = -(dot(sub(m.eyeMid, m.sMid), v) + 2.2 * m.headPx);
+  return Math.max(-0.25 * eff, Math.min(byShoulders, byHead));
+}
 function defaultBody(spec) { return bodyShape(spec.shHalf / SEAM_OVER_JOINTS); }
 
 // Height of the garment's top edge at distance ax from the centre line. The cloth rests on the wearer:
 // it slopes from the neck down to the shoulder point, then rounds over the shoulder and falls with the arm.
 function shoulderLine(spec, body, ax) {
   if (ax <= spec.neckHalf) return 0;
-  const tipX = Math.max(body.jHalf, spec.neckHalf + 4), tipY = Math.max(1.5, body.lift - 1.5), R = 6;
+  const tipX = Math.max(body.jHalf, spec.neckHalf + 4), tipY = Math.max(-8, Math.min(14, body.lift - 1.5)), R = 6;   // negative when the shoulders are raised above the neck base
   if (ax <= tipX) return (tipY * (ax - spec.neckHalf)) / (tipX - spec.neckHalf);
   const o = Math.min(ax - tipX, R * 0.97);
   return tipY + R - Math.sqrt(R * R - o * o);
@@ -496,11 +510,11 @@ function occluders(lm, world, vw, vh, m, sleevePx) {
   const vis = (i) => (lm[i].visibility == null ? 1 : lm[i].visibility);
   const u = effectiveShoulderPx(m) / 36;                       // about one centimetre on an adult, smaller on a child
   const out = [];
-  const earMid = mid(P(LM.EAR_L), P(LM.EAR_R));
+  const earMid = m.earMid, hd = m.headPx / 0.42;               // head width; sized from the head itself, since a child's head is large for their shoulders
   const up = norm(sub(earMid, m.sMid));
-  const neckBase = add(m.sMid, mul(up, 4 * u)), crown = add(earMid, mul(up, 5 * u));
-  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 5.2 * u, 5.6 * u, 1, 0]);
-  out.push([earMid.x, earMid.y, crown.x, crown.y, 10 * u, 10 * u, 1, 0]);
+  const neckBase = add(m.sMid, mul(up, 4 * u)), chin = sub(earMid, mul(up, 0.25 * hd)), crown = add(earMid, mul(up, 0.35 * hd));
+  out.push([neckBase.x, neckBase.y, earMid.x, earMid.y, 0.36 * hd, 0.38 * hd, 1, 0]);
+  out.push([chin.x, chin.y, crown.x, crown.y, 0.7 * hd, 0.7 * hd, 1, 0]);
   if (!world) return out;
   const torsoZ = (world[LM.SH_L].z + world[LM.SH_R].z + world[LM.HIP_L].z + world[LM.HIP_R].z) / 4;
   const front = (z) => smooth(0.03, 0.08, torsoZ - z);          // metres in front of the shoulder-hip plane
@@ -561,7 +575,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "10 (picture in step with the shirt, crew collar, dimmer lighting)";
+  const BUILD = "11 (collar stays at the neck when arms go up)";
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
   const NR = 28, NY = 18, NA = 9, NS = 14;
 
@@ -866,9 +880,9 @@ class OneEuro {
     const ms = { ...m, L: S(m.L), R: S(m.R), sMid: S(m.sMid), hMid: S(m.hMid), hipL: S(m.hipL), hipR: S(m.hipR), elbowL: m.elbowL && S(m.elbowL), elbowR: m.elbowR && S(m.elbowR) };
     const axes = garmentAxes(ms), fr = bodyFrames(m, axes);
     // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
-    const lift = LIFT * effectiveShoulderPx(m) * map.s;
-    const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, body = bodyShape(jHalf);
-    if (jHalf !== torsoBody) { torsoBody = jHalf; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
+    const lift = neckLift(m, axes.v) * map.s;
+    const jHalf = Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
+    if (jHalf + "/" + liftCm !== torsoBody) { torsoBody = jHalf + "/" + liftCm; setTube(torso, torsoTube(spec, NR, NY, body)); }   // reshape the shoulders to this wearer
     const O = sub(ms.sMid, mul(axes.v, lift));
     const hipY = m.hipsOk ? (m.torsoPx * map.s + lift) / ppcScreen : 1e4;
     const clamp = (x, a) => Math.max(-a, Math.min(a, x));
