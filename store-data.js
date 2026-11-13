@@ -55,13 +55,28 @@
     P("kurta-eid-k", "Festive Kurta", "kurta", "kids", 2490, "plain", [C.white, C.sky, C.mustard], 10, "A soft cotton kurta for Eid and family days."),
     P("trouser-play-k", "Pull-on Trouser", "trousers", "kids", 1590, "plain", [C.navy, C.khaki], 12, "Elastic waist, room to move."),
   ];
+  // Fabrics, as a mill specifies them: weight in GSM and bending length in cm. The try-on uses these to hang and swing the cloth.
+  const FABRICS = {
+    lawn: { label: "Lawn", gsm: 70, bend: 1.6 }, jersey: { label: "Jersey knit", gsm: 150, bend: 1.9 }, poplin: { label: "Poplin", gsm: 120, bend: 2.2 }, oxford: { label: "Oxford", gsm: 150, bend: 2.6 },
+    linen: { label: "Linen", gsm: 180, bend: 3.2 }, twill: { label: "Twill", gsm: 260, bend: 3.6 }, denim: { label: "Denim", gsm: 400, bend: 5.0 },
+  };
+  const TYPE_FABRIC = { tee: "jersey", shirt: "poplin", kurta: "poplin", trousers: "twill" };
+  const PRODUCT_FABRIC = { "shirt-oxford-m": { type: "oxford", count: "40s" }, "kurta-classic-m": { type: "poplin", count: "50s" }, "kurta-lawn-w": { type: "lawn", count: "80s" }, "shirt-stripe-w": { type: "poplin", count: "60s" }, "kurta-eid-k": { type: "lawn", count: "60s" }, "tee-heather-w": { type: "jersey", gsm: 130 } };
+  for (const p of DEFAULT_PRODUCTS) if (PRODUCT_FABRIC[p.id]) p.fabric = PRODUCT_FABRIC[p.id];
   const DEFAULT_SETTINGS = { name: "Darzi", tagline: "See how it fits before you buy.", whatsapp: "", delivery: 250, freeOver: 5000 };
 
   const read = (k, d) => { try { const v = localStorage.getItem("darzi." + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
   const write = (k, v) => { try { localStorage.setItem("darzi." + k, JSON.stringify(v)); return true; } catch { return false; } };
 
   const store = {
-    CHARTS, TYPES, COLOURS: Object.values(C), DEFAULT_PRODUCTS,
+    CHARTS, TYPES, COLOURS: Object.values(C), DEFAULT_PRODUCTS, FABRICS,
+    // A product's fabric with every number filled in: its own where the shop gave them, otherwise the usual ones for that cloth.
+    fabricOf(p) {
+      const own = p.fabric && FABRICS[p.fabric.type] ? p.fabric : PRODUCT_FABRIC[p.id] || { type: TYPE_FABRIC[TYPES[p.type] ? p.type : "tee"] }, base = FABRICS[own.type];
+      const num = (x, lo, hi) => { const n = Number(x); return x != null && x !== "" && n >= lo && n <= hi ? n : null; };
+      return { type: own.type, label: base.label, gsm: num(own.gsm, 30, 600) || base.gsm, bend: num(own.bend, 0.5, 9) || (num(own.drape, 10, 98) ? null : base.bend), drape: num(own.drape, 10, 98), count: own.count ? String(own.count).slice(0, 12) : "" };
+    },
+    fabricText(p) { const f = this.fabricOf(p); return `${f.label}, ${f.gsm} GSM` + (f.count ? `, ${f.count} yarn` : ""); },
     typeOf(p) { return TYPES[p.type] ? p.type : "tee"; },
     fields(type) { return type === "trousers" ? FIELDS.trousers : FIELDS.top; },
     chartFor(type, group) { return JSON.parse(JSON.stringify((CHARTS[type] || CHARTS.tee)[group] || CHARTS.tee.men)); },

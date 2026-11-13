@@ -211,6 +211,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
         <a class="crumb" href="#/${esc(p.group)}">&larr; ${esc(p.group[0].toUpperCase() + p.group.slice(1))}</a>
         <div><h1>${esc(p.name)}</h1><p class="price" style="font-size:20px;margin:8px 0 0">${S.money(p.price)}</p></div>
         <p class="note" style="color:var(--ink)">${esc(p.desc || "")}</p>
+        <p class="note" id="fabricLine">Fabric: ${esc(S.fabricText(p))}</p>
         <div><span class="label">Colour: ${esc(colourName(p, st.colour))}</span><div class="swatches" role="radiogroup" aria-label="Colour">${p.colours.map((c) => `<button class="sw" role="radio" aria-checked="${c.hex === st.colour}" aria-label="${esc(c.name)}" title="${esc(c.name)}" style="background:${esc(c.hex)}" data-act="colour" data-v="${esc(c.hex)}"></button>`).join("")}</div></div>
         <div><span class="label">Size</span><div class="sizes" role="radiogroup" aria-label="Size">${p.chart.map((r) => `<button class="sz${r.id === st.suggested ? " suggested" : ""}" role="radio" aria-checked="${r.id === st.size}" data-act="size" data-v="${esc(r.id)}" ${stockOf(p, r.id) ? "" : "disabled"}>${esc(r.id)}</button>`).join("")}</div>
           ${st.suggested ? `<p class="note ok" style="margin-top:8px">Your measured size is ${esc(st.suggested)}.</p>` : ""}</div>
@@ -263,14 +264,14 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
   let fitting = null;
   function openTryOn(p) {
     fitting = p; const f = $("fitFrame"); $("fitting").hidden = false; document.body.style.overflow = "hidden";
-    f.src = "try-on-bench.html?v=19#embed";
+    f.src = "try-on-bench.html?v=20#embed";
   }
   function closeTryOn() { $("fitting").hidden = true; $("fitFrame").src = "about:blank"; document.body.style.overflow = ""; fitting = null; }
   window.addEventListener("message", (ev) => {
     if (ev.origin !== location.origin || !ev.data || typeof ev.data.type !== "string" || !fitting) return;
     const p = fitting, st = state(p), d = ev.data;
     if (d.type === "tryon:ready") {
-      $("fitFrame").contentWindow.postMessage({ type: "tryon:config", product: { name: p.name, type: S.typeOf(p), chart: p.chart, colours: p.colours, colour: st.colour, size: st.size, pattern: p.pattern, print: p.print || null } }, location.origin);
+      $("fitFrame").contentWindow.postMessage({ type: "tryon:config", product: { name: p.name, type: S.typeOf(p), chart: p.chart, colours: p.colours, colour: st.colour, size: st.size, pattern: p.pattern, fabric: S.fabricOf(p), print: p.print || null } }, location.origin);
       return;
     }
     if (d.size && p.chart.some((r) => r.id === d.size)) st.size = d.size;

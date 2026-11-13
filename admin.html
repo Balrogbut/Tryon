@@ -101,7 +101,15 @@ textarea.json { width: 100%; min-height: 160px; font: 12.5px/1.45 var(--data); p
       <div class="editor"><div class="fields">
         <div class="two"><div class="field"><label for="p_name">Name</label><input id="p_name" value="${esc(d.name)}"></div><div class="field"><label for="p_price">Price (Rs)</label><input id="p_price" type="number" min="0" step="10" value="${esc(d.price)}"></div></div>
         <div class="two"><div class="field"><label for="p_type">Garment type</label><select id="p_type">${Object.keys(S.TYPES).map((g) => `<option value="${g}" ${g === S.typeOf(d) ? "selected" : ""}>${S.TYPES[g]}</option>`).join("")}</select></div><div class="field"><label for="p_group">Group</label><select id="p_group">${["men", "women", "kids"].map((g) => `<option ${g === d.group ? "selected" : ""}>${g}</option>`).join("")}</select></div></div>
-        <div class="two"><div class="field"><label for="p_pattern">Fabric pattern</label><select id="p_pattern">${["plain", "stripes", "heather"].map((g) => `<option ${g === d.pattern ? "selected" : ""}>${g}</option>`).join("")}</select></div></div>
+        <div class="two"><div class="field"><label for="p_pattern">Fabric pattern</label><select id="p_pattern">${["plain", "stripes", "heather"].map((g) => `<option ${g === d.pattern ? "selected" : ""}>${g}</option>`).join("")}</select></div>
+          <div class="field"><label for="p_fabric">Fabric</label><select id="p_fabric">${Object.keys(S.FABRICS).map((g) => `<option value="${g}" ${g === S.fabricOf(d).type ? "selected" : ""}>${esc(S.FABRICS[g].label)}</option>`).join("")}</select></div></div>
+        <div class="two">
+          <div class="field"><label for="p_gsm">Weight (GSM)</label><input id="p_gsm" type="number" min="30" max="600" step="5" value="${esc((d.fabric && d.fabric.gsm) || "")}" placeholder="${S.FABRICS[S.fabricOf(d).type].gsm}"></div>
+          <div class="field"><label for="p_bend">Bending length (cm)</label><input id="p_bend" type="number" min="0.5" max="9" step="0.1" value="${esc((d.fabric && d.fabric.bend) || "")}" placeholder="${S.FABRICS[S.fabricOf(d).type].bend}"></div>
+          <div class="field"><label for="p_drape">Drape coefficient (%)</label><input id="p_drape" type="number" min="10" max="98" step="1" value="${esc((d.fabric && d.fabric.drape) || "")}" placeholder="optional"></div>
+          <div class="field"><label for="p_count">Yarn count</label><input id="p_count" maxlength="12" value="${esc((d.fabric && d.fabric.count) || "")}" placeholder="e.g. 60s"></div>
+        </div>
+        <p class="hint">From the mill's spec sheet. Weight and bending length (or the drape coefficient, if that is what you have) set how the cloth hangs and swings in the try-on. Leave a box empty to use the usual value for that fabric. Yarn count is shown to customers but does not change the try-on.</p>
         <div class="field"><label for="p_desc">Description</label><textarea id="p_desc" rows="2">${esc(d.desc || "")}</textarea></div>
         <div class="field"><span class="l">Colours</span><div class="cols">${S.COLOURS.map((c) => `<label><input type="checkbox" data-col="${esc(c.hex)}" ${d.colours.some((x) => x.hex === c.hex) ? "checked" : ""}><i style="background:${esc(c.hex)}"></i>${esc(c.name)}</label>`).join("")}</div></div>
         <div class="field"><span class="l">Chest print (optional)</span><div class="bar"><input type="file" id="p_print" accept="image/*" style="max-width:260px">${d.print ? '<button class="btn small" data-act="noprint">Remove print</button>' : ""}</div><p class="hint">A logo or artwork with a transparent background works best. It is shown on the chest in the try-on.</p></div>
@@ -118,6 +126,7 @@ textarea.json { width: 100%; min-height: 160px; font: 12.5px/1.45 var(--data); p
     const d = draft; if (!$("p_name")) return;
     const newType = $("p_type").value, typeChanged = newType !== S.typeOf(d); d.type = newType;
     d.name = $("p_name").value.trim(); d.price = Math.max(0, Number($("p_price").value) || 0); d.group = $("p_group").value; d.pattern = $("p_pattern").value; d.desc = $("p_desc").value.trim();
+    if ($("p_fabric")) { const nv = (id) => { const v = $(id).value.trim(); return v === "" ? null : Number(v); }; d.fabric = { type: $("p_fabric").value, gsm: nv("p_gsm"), bend: nv("p_bend"), drape: nv("p_drape"), count: $("p_count").value.trim() }; }
     d.colours = S.COLOURS.filter((c) => { const b = document.querySelector(`[data-col="${c.hex}"]`); return b && b.checked; });
     const stock = {};
     if (typeChanged) { d.chart = S.chartFor(d.type, d.group); d.stock = Object.fromEntries(d.chart.map((r) => [r.id, 5])); return "type"; }   // a different garment needs a different set of measurements
@@ -130,6 +139,12 @@ textarea.json { width: 100%; min-height: 160px; font: 12.5px/1.45 var(--data); p
     if (d.name.length < 2) return "Give the product a name.";
     if (!d.colours.length) return "Choose at least one colour.";
     if (!d.chart.length) return "Add at least one size.";
+    if (d.fabric) {
+      const bad = (x, lo, hi) => x != null && !(x >= lo && x <= hi);
+      if (bad(d.fabric.gsm, 30, 600)) return "Fabric weight should be between 30 and 600 GSM.";
+      if (bad(d.fabric.bend, 0.5, 9)) return "Bending length should be between 0.5 and 9 cm.";
+      if (bad(d.fabric.drape, 10, 98)) return "Drape coefficient should be between 10 and 98 percent.";
+    }
     const ids = new Set();
     for (const r of d.chart) {
       if (!r.id) return "Every size needs a name, such as M or 6-7Y.";
