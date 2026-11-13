@@ -510,10 +510,24 @@ function shoulderLine(spec, body, ax) {
   const o = Math.min(ax - tipX, R * 0.97);
   return tipY + R - Math.sqrt(R * R - o * o);
 }
+// A garment too wide for its wearer cannot stand out sideways: the shoulders and upper arms hold out only so much
+// cloth, and the rest hangs down in folds. X is a point's place across a row that is hw wide when laid flat; the
+// result is where it sits on the wearer. The middle of the garment is left as cut; the surplus is gathered at the sides.
+// bodyHalf is the wearer's own half width at that height where it was measured.
+function drapeX(spec, body, X, hw, yRow, bodyHalf) {
+  const sup = Math.max(body.jHalf * 1.24, spec.neckHalf + 4, bodyHalf == null ? 0 : bodyHalf + 0.5) + 0.06 * Math.max(0, yRow), a = Math.abs(X), x0 = 0.8 * body.jHalf;
+  if (hw <= sup || a <= x0 || hw <= x0) return X;
+  return Math.sign(X) * (x0 + ((a - x0) * (sup - x0)) / (hw - x0));
+}
+// The garment's top edge at fabric distance ax from the centre: what is gathered off the shoulder drops down the arm.
+function shoulderTop(spec, body, ax) {
+  const axD = Math.abs(drapeX(spec, body, ax, spec.shHalf, 0));
+  return shoulderLine(spec, body, axD) + 0.9 * (ax - axD);
+}
 // Where the sleeve is sewn on: shoulder point and underarm point, on the wearer's left for side = 1.
 function armhole(spec, body, side) {
-  const y = shoulderLine(spec, body, spec.shHalf);
-  return { top: { x: side * spec.shHalf, y }, pit: { x: side * spec.chHalf, y: Math.max(spec.armhole, y + 10) } };
+  const y = shoulderTop(spec, body, spec.shHalf), py = Math.max(spec.armhole, y + 10);
+  return { top: { x: side * Math.abs(drapeX(spec, body, spec.shHalf, spec.shHalf, 0)), y }, pit: { x: side * Math.abs(drapeX(spec, body, spec.chHalf, spec.chHalf, py)), y: py } };
 }
 
 // ---- Body shape. Nothing here assumes standard proportions: the widths are measured from the wearer's own outline. ----
@@ -615,11 +629,11 @@ function torsoTube(spec, nr, ny, body) {
       zf = hd + Math.max(0, f + 0.3 - hd) * w1; zb = hd + Math.max(0, linAt(pr.back, yRow) + 0.3 - hd) * w1;
     }
     // The body inside, for the cloth to hang around: measured where an outline was read, otherwise as much smaller than the garment as the fit says.
-    const ba = Math.max(2, Math.min(hw - 0.3, bh != null ? bh : hwOwn * (1 + Math.min(0, fitDefault))));
-    rows.push({ t, e, hw, zf, zb, strain, yRow, ba, bf: Math.max(1.5, Math.min(zf - 0.3, (zf * ba) / hw + (pr && pr.front ? 99 : 0))), bb: Math.max(1.5, Math.min(zb - 0.3, (zb * ba) / hw + (pr && pr.back ? 99 : 0))) });
+    const ba = Math.max(2, Math.min(Math.abs(drapeX(spec, body, hw, hw, yRow, bh)) - 0.3, bh != null ? bh : hwOwn * (1 + Math.min(0, fitDefault))));
+    rows.push({ t, e, hw, zf, zb, strain, yRow, bh, ba, bf: Math.max(1.5, Math.min(zf - 0.3, (zf * ba) / hw + (pr && pr.front ? 99 : 0))), bb: Math.max(1.5, Math.min(zb - 0.3, (zb * ba) / hw + (pr && pr.back ? 99 : 0))) });
   }
   for (let j = 0; j < ny; j++) {
-    const { t, e, hw, zf, zb, strain } = rows[j], a = rows[Math.max(0, j - 1)], b = rows[Math.min(ny - 1, j + 1)];
+    const { t, e, hw, zf, zb, strain, yRow, bh } = rows[j], a = rows[Math.max(0, j - 1)], b = rows[Math.min(ny - 1, j + 1)];
     const slope = (b.zf - a.zf) / Math.max(1e-6, b.yRow - a.yRow);   // how the front surface leans: shades the underside of a bust or belly
     for (let i = 0; i < cols; i++) {
       // On a garment with side slits the columns sit half a step off the side seams, so each slit falls between two columns.
@@ -631,10 +645,10 @@ function torsoTube(spec, nr, ny, body) {
       }
       const px = Math.sin(ph), cz = Math.cos(ph), hd = cz >= 0 ? zf : zb;
       const ax = Math.abs(sx) * spec.shHalf;
-      const yTop = shoulderLine(spec, body, ax);
+      const yTop = shoulderTop(spec, body, ax);
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = px / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
-      pos[n] = hw * px; pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
+      pos[n] = drapeX(spec, body, hw * px, hw, yRow, bh); pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
       const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fy = cz > 0 ? -slope * cz : 0, fl = Math.hypot(fx, fy, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
       nrm[n] = fx / fl; nrm[n + 1] = fy / fl; nrm[n + 2] = fz / fl;
       g[n] = sx; g[n + 1] = t; g[n + 2] = 0; fit[n / 3] = strain;
@@ -997,7 +1011,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "21 (cloth physics, sleeve stripes, height check)";
+  const BUILD = "22 (too-big garments hang off the shoulders)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
