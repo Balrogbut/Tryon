@@ -1011,7 +1011,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "22 (too-big garments hang off the shoulders)";
+  const BUILD = "23 (steadier tracking while the outline is read)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1667,7 +1667,7 @@ class OneEuro {
   // Reads the body outline at waist and hip level. Runs only while facing the camera, at most ~twice a second,
   // and stops once it has enough readings, because each reading briefly pauses the tracking.
   async function sampleShape(lm, world, m, now) {
-    if (shaperFailed || !makeTracker || now - lastShape < 600 || shape.tries > 60) return;
+    if (shaperFailed || !makeTracker || now - lastShape < (shape.tries > 12 ? 2500 : 600) || shape.tries > 60) return;   // each reading pauses the tracker, so after the first few they are spaced out
     if (state.turnProfile || turn.on || (shape.waist.length >= 8 && shape.hip.length >= 8)) return;
     if (!state.forceShape && (!calib.locked || !m.upper || Math.abs(state.yaw || 0) > 0.3)) return;
     lastShape = now; shape.tries++;
