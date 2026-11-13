@@ -514,20 +514,23 @@ function shoulderLine(spec, body, ax) {
 // cloth, and the rest hangs down in folds. X is a point's place across a row that is hw wide when laid flat; the
 // result is where it sits on the wearer. The middle of the garment is left as cut; the surplus is gathered at the sides.
 // bodyHalf is the wearer's own half width at that height where it was measured.
-function drapeX(spec, body, X, hw, yRow, bodyHalf) {
+function drapeX(spec, body, X, hw, yRow, bodyHalf, amt) {
   const sup = Math.max(body.jHalf * 1.24, spec.neckHalf + 4, bodyHalf == null ? 0 : bodyHalf + 0.5) + 0.06 * Math.max(0, yRow), a = Math.abs(X), x0 = 0.8 * body.jHalf;
   if (hw <= sup || a <= x0 || hw <= x0) return X;
-  return Math.sign(X) * (x0 + ((a - x0) * (sup - x0)) / (hw - x0));
+  const g = Math.sign(X) * (x0 + ((a - x0) * (sup - x0)) / (hw - x0));
+  return amt == null ? g : X + (g - X) * amt;
 }
 // The garment's top edge at fabric distance ax from the centre: what is gathered off the shoulder drops down the arm.
-function shoulderTop(spec, body, ax) {
-  const axD = Math.abs(drapeX(spec, body, ax, spec.shHalf, 0));
+// down is how far that arm hangs down (1) rather than being held out (0): cloth lies along an arm that is held out.
+const armDown = (body, side) => (body.armDown ? body.armDown[side > 0 ? 0 : 1] : 1);
+function shoulderTop(spec, body, ax, down) {
+  const axD = Math.abs(drapeX(spec, body, ax, spec.shHalf, 0, null, down));
   return shoulderLine(spec, body, axD) + 0.9 * (ax - axD);
 }
 // Where the sleeve is sewn on: shoulder point and underarm point, on the wearer's left for side = 1.
 function armhole(spec, body, side) {
-  const y = shoulderTop(spec, body, spec.shHalf), py = Math.max(spec.armhole, y + 10);
-  return { top: { x: side * Math.abs(drapeX(spec, body, spec.shHalf, spec.shHalf, 0)), y }, pit: { x: side * Math.abs(drapeX(spec, body, spec.chHalf, spec.chHalf, py)), y: py } };
+  const dn = armDown(body, side), y = shoulderTop(spec, body, spec.shHalf, dn), py = Math.max(spec.armhole, y + 10);
+  return { top: { x: side * Math.abs(drapeX(spec, body, spec.shHalf, spec.shHalf, 0, null, dn)), y }, pit: { x: side * Math.abs(drapeX(spec, body, spec.chHalf, spec.chHalf, py)), y: py } };
 }
 
 // ---- Body shape. Nothing here assumes standard proportions: the widths are measured from the wearer's own outline. ----
@@ -645,10 +648,10 @@ function torsoTube(spec, nr, ny, body) {
       }
       const px = Math.sin(ph), cz = Math.cos(ph), hd = cz >= 0 ? zf : zb;
       const ax = Math.abs(sx) * spec.shHalf;
-      const yTop = shoulderTop(spec, body, ax);
+      const dn = armDown(body, sx >= 0 ? 1 : -1), yTop = shoulderTop(spec, body, ax, dn);
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = px / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
-      pos[n] = drapeX(spec, body, hw * px, hw, yRow, bh); pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
+      pos[n] = drapeX(spec, body, hw * px, hw, yRow, bh, dn + (1 - dn) * smooth(0, spec.armhole, yRow)); pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
       const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fy = cz > 0 ? -slope * cz : 0, fl = Math.hypot(fx, fy, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
       nrm[n] = fx / fl; nrm[n + 1] = fy / fl; nrm[n + 2] = fz / fl;
       g[n] = sx; g[n + 1] = t; g[n + 2] = 0; fit[n / 3] = strain;
@@ -805,7 +808,7 @@ function gridIndex(nx, ny) {
 // How far the wearer has turned, from how narrow the shoulders look. ratio is apparent shoulder width over
 // torso length, widest is the largest that ratio has been (facing the camera). Returns 0 facing the camera
 // (front or back) up to 90 degrees side-on. Depth estimates are not used for the amount, only (elsewhere) for the side.
-function turnAmount(ratio, widest) { return Math.acos(Math.min(1, Math.max(0, ratio / Math.max(1e-6, widest) / 0.96))); }
+function turnAmount(ratio, widest) { return Math.acos(Math.min(1, Math.max(0, ratio / Math.max(1e-6, widest) / 0.92))); }
 
 // Smallest size in the chart that is not too tight anywhere. If none, the largest, with the zones that are short.
 function recommendSize(pr, type) {
@@ -1011,7 +1014,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "23 (steadier tracking while the outline is read)";
+  const BUILD = "24 (no false turn with arms out; cloth lies along a raised arm)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1397,7 +1400,8 @@ class OneEuro {
     // With the scale set, the wearer's shoulder width is known and does not change as they turn.
     const jHalf = state.mode === "true" && calib.locked ? Math.round(calib.shoulderCm * 2) / 4 : Math.round((effectiveShoulderPx(m) * map.s) / 2 / ppcScreen * 4) / 4, liftCm = Math.round((lift / ppcScreen) * 4) / 4, body = bodyShape(jHalf, liftCm);
     body.profile = shapeProfile(liftCm); body.fitDefault = Math.round((1 / state.ease - 1) * 40) / 40;
-    const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + JSON.stringify(body.profile, (k, x) => (typeof x === "number" ? Math.round(x * 2) / 2 : x));
+    body.armDown = [1, -1].map((side) => Math.round(Math.max(0, Math.min(1, 1.3 * armDir(ms, { u: fr.uTop, v: axes.v }, side).y)) * 8) / 8);
+    const bodyKey = jHalf + "/" + liftCm + "/" + body.fitDefault + "/" + body.armDown + "/" + JSON.stringify(body.profile, (k, x) => (typeof x === "number" ? Math.round(x * 2) / 2 : x));
     const simOn = clothOn();
     if (bodyKey !== torsoBody) {                             // reshape the garment to this wearer
       torsoBody = bodyKey; torsoNow = torsoTube(spec, NR, NY, body); setTube(torso, torsoNow);
@@ -1851,10 +1855,15 @@ class OneEuro {
     // How far the wearer has turned comes from how narrow the shoulders and hips look, which is steady.
     // The tracker's depth estimate only decides which shoulder is nearer, and is ignored unless it is clear.
     if (m.shouldersOk && m.torsoPx > 10) {
-      const rs = m.shoulderPx / m.torsoPx, rh = len(sub(m.hipL, m.hipR)) / m.torsoPx;
-      widest.sh = Math.max(widest.sh * 0.9998, rs); widest.hip = Math.max(widest.hip * 0.9998, rh);
+      // Widths are compared with the ear-to-hip distance, which raising the arms does not change (shoulder-to-hip does).
+      const span = m.earMid && m.hipsOk ? len(sub(m.earMid, m.hMid)) : 1.3 * m.torsoPx;
+      const rs = m.shoulderPx / span, rh = len(sub(m.hipL, m.hipR)) / span;
+      widest.sh = Math.max(widest.sh * 0.9995, rs); widest.hip = Math.max(widest.hip * 0.9995, rh);
       if (w) { const dz = w[LM.SH_L].z - w[LM.SH_R].z; if (Math.abs(dz) > 0.04) widest.sign = dz > 0 ? 1 : -1; }
-      const a = widest.sign * turnAmount(rs, widest.sh), b = m.hipsOk ? widest.sign * turnAmount(rh, widest.hip) : a;
+      // A second opinion from the tracker's 3D estimate: when it says the shoulders are square to the camera,
+      // narrow-looking shoulders are not read as a turn (arms raised, or a shrug, also narrow them).
+      const cap = w ? Math.atan2(Math.abs(w[LM.SH_L].z - w[LM.SH_R].z), Math.abs(w[LM.SH_L].x - w[LM.SH_R].x) + 1e-6) + 0.3 : 9;
+      const a = widest.sign * Math.min(cap, turnAmount(rs, widest.sh)), b = m.hipsOk ? widest.sign * Math.min(cap + 0.15, turnAmount(rh, widest.hip)) : a;
       state.yaw = Math.atan2(yawSin.filter(Math.sin(a), t), yawCos.filter(Math.cos(a), t));
       state.yawHip = Math.atan2(hipSin.filter(Math.sin(b), t), hipCos.filter(Math.cos(b), t));
       const right = norm({ x: m.hMid.y - m.sMid.y, y: -(m.hMid.x - m.sMid.x) });      // image-right for an upright wearer
