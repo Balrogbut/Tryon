@@ -264,7 +264,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
   let fitting = null;
   function openTryOn(p) {
     fitting = p; const f = $("fitFrame"); $("fitting").hidden = false; document.body.style.overflow = "hidden";
-    f.src = "try-on-bench.html?v=20#embed";
+    f.src = "try-on-bench.html?v=21#embed";
   }
   function closeTryOn() { $("fitting").hidden = true; $("fitFrame").src = "about:blank"; document.body.style.overflow = ""; fitting = null; }
   window.addEventListener("message", (ev) => {

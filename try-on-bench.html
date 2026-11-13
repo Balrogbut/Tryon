@@ -413,7 +413,15 @@ function bodyMetrics(lm, vw, vh) {
 const EYE_HIP_RATIO = 0.41;    // eye-to-hip-joint distance as a share of standing height; varies a few percent between people
 class Calibrator {
   constructor() { this.reset(); }
-  reset() { this.sh = []; this.to = []; this.rsh = []; this.rto = []; this.shoulderCm = null; this.torsoCm = null; this.exact = false; this.differs = 0; }
+  reset() { this.sh = []; this.to = []; this.rsh = []; this.rto = []; this.shoulderCm = null; this.torsoCm = null; this.exact = false; this.differs = 0; this.odd = 0; }
+  // Head size changes little with height, so it shows when the height typed in cannot be this wearer's:
+  // at the scale that height gives, their head would come out far too small or too large.
+  check(m, heightCm) {
+    const ppc = this.ppc(m); if (!ppc || !m.headOk || !m.shouldersOk) return;
+    const ratio = m.headPx / ppc / expectedEyeMouthCm(heightCm);
+    this.odd = ratio < 0.8 || ratio > 1.3 ? Math.min(60, this.odd + 1) : Math.max(0, this.odd - 2);
+  }
+  get heightDoubt() { return this.odd >= 25; }
   get needsFullHeight() { return !this.exact && this.differs >= 12; }
   get locked() { return this.shoulderCm != null; }
   add(m, heightCm) {
@@ -660,7 +668,9 @@ function sleeveTube(spec, side, d, yaw, na, nr, body, arm) {
   const r1 = long ? spec.elbowR : 0.5 * spec.sleeveOpen, rz0 = 0.6 * half, L = long ? Math.max(6, arm.upper - s0) : spec.sleeve * 0.95 + 1.5;
   const end = add(J, mul(d, s0 + L)), endTop = sub(end, mul(under, r1)), endUnder = add(end, mul(under, r1));
   const cap = sub(add(J, mul(d, s0)), mul(under, r1 + 1));           // where the top edge turns from the shoulder onto the arm
-  const ring = (j, T, B, rz, along) => {
+  // Stripes and other patterns run square to the arm and are cut off by the armhole seam, as on a sewn sleeve;
+  // uy gives each point's distance down the sleeve for that.
+  const ring = (j, T, B, rz, along, uy) => {
     const c = mid(T, B), r = Math.max(0.5, len(sub(B, T)) / 2), e1 = norm(sub(B, T));
     for (let i = 0; i < cols; i++) {
       const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
@@ -668,16 +678,17 @@ function sleeveTube(spec, side, d, yaw, na, nr, body, arm) {
       const nx = e1.x * co * rz, ny = e1.y * co * rz, nz = sn * r, nl = Math.hypot(nx, ny, nz) || 1;
       nrm[n] = nx / nl; nrm[n + 1] = ny / nl; nrm[n + 2] = nz / nl;
       g[n] = co; g[n + 1] = along; g[n + 2] = 1;
-      uv[(n / 3) * 2] = th * r; uv[(n / 3) * 2 + 1] = along * spec.sleeve;
+      uv[(n / 3) * 2] = th * r; uv[(n / 3) * 2 + 1] = uy ? uy(pos[n], pos[n + 1]) : along * spec.sleeve;
     }
   };
+  const uyUp = (x, y) => (x - J.x) * d.x + (y - J.y) * d.y - s0, uyFore = (x, y) => L + (x - end.x) * arm.d2.x + (y - end.y) * arm.d2.y;
   let lastT = top, lastB = pit;
   for (let j = 0; j < nUp; j++) {
     const a = j / (nUp - 1), b = 1 - a;
     const T = { x: b * b * top.x + 2 * a * b * cap.x + a * a * endTop.x, y: b * b * top.y + 2 * a * b * cap.y + a * a * endTop.y };
     const B = { x: pit.x + (endUnder.x - pit.x) * a, y: pit.y + (endUnder.y - pit.y) * a };
     const ta = 1 - b * b * b;
-    ring(j, T, B, rz0 + (r1 - rz0) * ta, long ? a * 0.5 : a); lastT = T; lastB = B;
+    ring(j, T, B, rz0 + (r1 - rz0) * ta, long ? a * 0.5 : a, uyUp); lastT = T; lastB = B;
   }
   if (long) {
     // Forearm: from the elbow along the wearer's forearm, as far as the sleeve reaches, never much past the wrist.
@@ -686,9 +697,9 @@ function sleeveTube(spec, side, d, yaw, na, nr, body, arm) {
       const q = (j - nUp + 1) / (na - nUp), w = smooth(0, 0.4, q);
       const dd = norm({ x: d.x + (arm.d2.x - d.x) * w, y: d.y + (arm.d2.y - d.y) * w }), u2 = { x: -dd.y * side, y: dd.x * side };
       const c = add(end, mul(arm.d2, use * q)), r = r1 + (spec.cuffR - r1) * q;
-      ring(j, sub(c, mul(u2, r)), add(c, mul(u2, r)), r, 0.5 + 0.5 * q);
+      ring(j, sub(c, mul(u2, r)), add(c, mul(u2, r)), r, 0.5 + 0.5 * q, uyFore);
     }
-  } else for (let j = nUp; j < na; j++) ring(j, lastT, lastB, r1, 1);
+  } else for (let j = nUp; j < na; j++) ring(j, lastT, lastB, r1, 1, uyUp);
   return { pos, nrm, g, uv };
 }
 
@@ -986,7 +997,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "20 (cloth physics)";
+  const BUILD = "21 (cloth physics, sleeve stripes, height check)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1704,6 +1715,8 @@ class OneEuro {
     if (turn.on) { text = ""; }
     else if (turn.msg) text = turn.msg;
     else
+    if (state.running && state.mode === "true" && calib.heightDoubt) text = `This wearer does not look ${state.heightCm} cm tall. Set their height in the controls, or the size shown will be wrong.`;
+    else
     if (state.running && state.mode === "true" && !calib.exact) {
       if (calib.needsFullHeight) text = "The quick estimate is not reliable for this wearer. Step back once so head and feet show.";
       else if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
@@ -1837,7 +1850,7 @@ class OneEuro {
     // Ease: garment shoulder width against the wearer's. Above 1 the shirt is loose, below 1 it pulls.
     state.ease = state.mode === "true" && calib.locked && spec.shoulder ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
     if (!Number.isFinite(state.ease)) state.ease = 1.08;
-    calib.add(m, state.heightCm);
+    calib.add(m, state.heightCm); calib.check(m, state.heightCm);
     sampleLight(now);
     const ppc = calib.ppc(m);
     if (ppc) ppcSmooth = ppcSmooth == null ? ppc : ppcSmooth + 0.25 * (ppc - ppcSmooth);
@@ -1857,6 +1870,8 @@ class OneEuro {
     if (!pose.target) {
       state.metrics = null; pose.lm = null; pose.ppc = null; hideGarment(); joints.visible = false; resetSwing();
       if (now - state.lastSeen > 400) { setPill("warn", "No one in view"); el.tape.hidden = true; }
+      // Away for a while: the next person in view may be someone else, so the scale is measured afresh for them.
+      if (now - state.lastSeen > 2500 && calib.locked) { calib.reset(); ppcSmooth = null; state.ppcVideo = null; }
       updateGuide(null, now); renderer.render(scene, camera); updateUi(now); return;
     }
     const k = backdrop && backdrop.visible ? 1 : 1 - Math.exp(-dt * 26), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
