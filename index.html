@@ -194,7 +194,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
   function pageList(group) {
     nav(group);
     const list = products.filter((p) => !group || p.group === group);
-    view.innerHTML = `<div class="intro"><h1>${esc(settings.tagline)}</h1><p class="lede">Every piece can be tried on with your phone's camera, drawn at its real measurements. Measure yourself once and the shop suggests your size.</p></div>
+    view.innerHTML = `<div class="intro"><h1>${esc(settings.tagline)}</h1><p class="lede">T-shirts, shirts, kurtas and trousers, each tried on with your phone's camera and drawn at its real measurements. Measure yourself once and the shop suggests your size.</p></div>
       <div class="grid">${list.map((p) => `<a class="item" href="#/p/${esc(p.id)}">
         <div class="pic">${S.shirtSvg(p, p.colours[0].hex)}</div>
         <div class="name">${esc(p.name)}</div>
@@ -215,8 +215,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
         <div><span class="label">Size</span><div class="sizes" role="radiogroup" aria-label="Size">${p.chart.map((r) => `<button class="sz${r.id === st.suggested ? " suggested" : ""}" role="radio" aria-checked="${r.id === st.size}" data-act="size" data-v="${esc(r.id)}" ${stockOf(p, r.id) ? "" : "disabled"}>${esc(r.id)}</button>`).join("")}</div>
           ${st.suggested ? `<p class="note ok" style="margin-top:8px">Your measured size is ${esc(st.suggested)}.</p>` : ""}</div>
         <dl class="measures" aria-label="Measurements of size ${esc(row.id)}">
-          <div><dt>Chest</dt><dd>${row.chest * 2} <small>cm round</small></dd></div><div><dt>Length</dt><dd>${row.length} <small>cm</small></dd></div>
-          <div><dt>Shoulder</dt><dd>${row.shoulder} <small>cm</small></dd></div><div><dt>Sleeve</dt><dd>${row.sleeve} <small>cm</small></dd></div>
+          ${S.fields(S.typeOf(p)).map((f) => `<div><dt>${f.label}</dt><dd>${f.round ? row[f.k] * 2 : row[f.k]} <small>cm${f.round ? " round" : ""}</small></dd></div>`).join("")}
         </dl>
         <div class="btns actions"><button class="btn primary" data-act="tryon">Try it on</button><button class="btn solid" data-act="add" ${left > 0 ? "" : "disabled"}>${left > 0 ? "Add to cart" : "Out of stock"}</button></div>
         <p class="note">Try it on uses your camera. The picture stays on your phone; nothing is uploaded or saved.</p>
@@ -264,14 +263,14 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
   let fitting = null;
   function openTryOn(p) {
     fitting = p; const f = $("fitFrame"); $("fitting").hidden = false; document.body.style.overflow = "hidden";
-    f.src = "try-on-bench.html?v=18#embed";
+    f.src = "try-on-bench.html?v=19#embed";
   }
   function closeTryOn() { $("fitting").hidden = true; $("fitFrame").src = "about:blank"; document.body.style.overflow = ""; fitting = null; }
   window.addEventListener("message", (ev) => {
     if (ev.origin !== location.origin || !ev.data || typeof ev.data.type !== "string" || !fitting) return;
     const p = fitting, st = state(p), d = ev.data;
     if (d.type === "tryon:ready") {
-      $("fitFrame").contentWindow.postMessage({ type: "tryon:config", product: { name: p.name, chart: p.chart, colours: p.colours, colour: st.colour, size: st.size, pattern: p.pattern, print: p.print || null } }, location.origin);
+      $("fitFrame").contentWindow.postMessage({ type: "tryon:config", product: { name: p.name, type: S.typeOf(p), chart: p.chart, colours: p.colours, colour: st.colour, size: st.size, pattern: p.pattern, print: p.print || null } }, location.origin);
       return;
     }
     if (d.size && p.chart.some((r) => r.id === d.size)) st.size = d.size;

@@ -82,9 +82,9 @@ button { cursor: pointer; }
 .sizechip { position: absolute; right: var(--gutter-r); top: calc(58px + env(safe-area-inset-top, 0px)); max-width: 62%; padding: 6px 10px; border-radius: 8px; background: var(--tape); color: var(--tape-ink); font: 700 13px/1.25 var(--ui); text-align: right; }
 .chip.suggested { box-shadow: inset 0 -3px 0 var(--ok); }
 .stage.measuring #sheetBody { display: none !important; }
-.embed-bar { display: none; }
-.stage.embed .embed-bar { display: flex; }
-.stage.embed #patterns, .stage.embed #openProbe, .stage.embed #turnRow { display: none; }
+.row.embed-bar { display: none; }
+.stage.embed .row.embed-bar { display: flex; }
+.stage.embed #patterns, .stage.embed #garments, .stage.embed #openProbe, .stage.embed #turnRow { display: none; }
 .stage.embed #turnRowEmbed { display: flex; }
 #turnRowEmbed { display: none; }
 .hint span { padding: 6px 11px; border-radius: 8px; background: rgba(16, 20, 27, .78); border: 1px solid var(--line); font-size: 13px; line-height: 1.3; max-width: 34ch; }
@@ -101,7 +101,7 @@ button { cursor: pointer; }
   flex: none; min-width: 46px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--ink-2);
   font: 600 14px/1 var(--ui); font-variant-numeric: tabular-nums;
 }
-#patterns .chip { font-weight: 500; font-size: 13px; }
+#patterns .chip, #garments .chip { font-weight: 500; font-size: 13px; }
 .chip[aria-checked="true"] { background: var(--tape); border-color: var(--tape); color: var(--tape-ink); }
 .sizes .sep { flex: none; width: 1px; height: 22px; background: var(--line); }
 .swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
@@ -142,9 +142,10 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
 @media (prefers-reduced-motion: no-preference) { .tape-bar { transition: width .12s linear; } }
 /* Phone held sideways: the controls move to a column on the right so the wearer stays visible. */
 @media (orientation: landscape) and (max-height: 520px) {
-  .sheet { left: auto; top: 0; width: min(46%, 400px); justify-content: flex-end; overflow-y: auto; background: rgba(16, 20, 27, .9); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-left: 14px; }
+  .sheet { left: auto; top: 0; width: min(46%, 400px); justify-content: flex-start; overflow-y: auto; background: rgba(16, 20, 27, .9); padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-left: 14px; }
   .sizes { margin-inline: 0; padding-inline: 0; }
   .top { right: min(46%, 400px); }
+  .measure, .hint, .sizechip { right: calc(min(46%, 400px) + 10px); }
   .actions { flex-wrap: wrap; }
 }
 </style>
@@ -181,7 +182,8 @@ pre.dump { margin: 0; padding: 10px; border: 1px solid var(--line); border-radiu
   <section class="sheet" id="sheet" aria-label="Garment controls">
     <button class="sheet-toggle" id="sheetToggle" type="button" aria-expanded="true">Hide controls</button>
     <div id="sheetBody" style="display:contents">
-      <div class="row sizes" id="sizes" role="radiogroup" aria-label="T-shirt size"></div>
+      <div class="row" id="garments" role="radiogroup" aria-label="Garment"></div>
+      <div class="row sizes" id="sizes" role="radiogroup" aria-label="Size"></div>
       <div class="row">
         <div class="row" id="swatches" role="radiogroup" aria-label="Fabric colour"></div>
         <label class="height" for="height">Wearer height
@@ -287,7 +289,7 @@ const SIZE_CHART = [
 ];
 
 // Pose landmark numbers used here (MediaPipe's 33-point body model).
-const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 23, HIP_R: 24, KNEE_L: 25, KNEE_R: 26, HEEL_L: 29, HEEL_R: 30, EAR_L: 7, EAR_R: 8, MOUTH_L: 9, MOUTH_R: 10, WR_L: 15, WR_R: 16, IDX_L: 19, IDX_R: 20 };
+const LM = { EYE_L: 2, EYE_R: 5, SH_L: 11, SH_R: 12, EL_L: 13, EL_R: 14, HIP_L: 23, HIP_R: 24, KNEE_L: 25, KNEE_R: 26, ANK_L: 27, ANK_R: 28, HEEL_L: 29, HEEL_R: 30, EAR_L: 7, EAR_R: 8, MOUTH_L: 9, MOUTH_R: 10, WR_L: 15, WR_R: 16, IDX_L: 19, IDX_R: 20 };
 
 // Assumptions, all approximate and all worth replacing with measured values later.
 const EYE_HEEL_RATIO = 0.92;   // eye-to-heel distance as a share of standing height
@@ -296,21 +298,32 @@ const TUBE = 2 / Math.PI;      // a sleeve opening of flat width W is a tube abo
 const SEAM_OVER_JOINTS = 1.15; // shoulder seam width of a well-fitting tee relative to the tracked shoulder-point distance
 const LIFT = 0.21;             // base of the neck above the line between the tracked shoulder points, as a share of their distance
 
-function garmentSpec(row) {
+function garmentSpec(row, type) {
+  type = type || "tee";
+  if (type === "trousers") {
+    // Flat measurements: waist and hip across the front, length down the outside leg, hem across the leg opening.
+    return { type, id: row.id, waistHalf: (row.waist * 0.72) / 2, hipHalf: (row.hip * WORN_WIDTH) / 2, length: row.length, rise: 0.5 * row.hip,
+      thighR: (0.6 * row.hip) / Math.PI, hemR: row.hem / Math.PI, hipDrop: 8 };
+  }
+  const long = row.sleeve > 35, upper = type !== "tee";
   return {
-    id: row.id,
+    type, id: row.id,
     shoulder: row.shoulder,
     shHalf: row.shoulder / 2,
     chHalf: (row.chest * WORN_WIDTH) / 2,
     length: row.length,
     drop: 0.085 * row.shoulder,
-    armhole: 0.31 * row.length,
-    neckHalf: 0.175 * row.shoulder,
-    neckDrop: 0.125 * row.shoulder,
+    armhole: Math.min(0.31 * row.length, 0.5 * row.chest),
+    neckHalf: (upper ? 0.16 : 0.175) * row.shoulder,
+    neckDrop: (upper ? 0.1 : 0.125) * row.shoulder,
     sleeve: row.sleeve,
     sleeveOpen: 0.33 * row.chest * TUBE,
+    long, elbowR: 0.14 * row.chest * TUBE + 1, cuffR: 0.072 * row.chest + 0.2,
+    collar: type === "shirt" ? 1 : type === "kurta" ? 2 : 0,           // 0 crew rib, 1 shirt collar, 2 band collar
+    placket: type === "shirt" ? row.length - 3 : type === "kurta" ? 0.125 * row.shoulder + 26 : 0,
+    slitY: type === "kurta" ? 0.62 * row.length : 1e4,
     hemCurve: 0.02 * row.length,
-  };
+  }
 }
 
 function quantile(values, q) {
@@ -372,6 +385,9 @@ function bodyMetrics(lm, vw, vh) {
     torsoPx: len(sub(hMid, sMid)),
     eyeHeelPx: len(sub(heelMid, eyeMid)),
     hipL: P(LM.HIP_L), hipR: P(LM.HIP_R),
+    wristL: vis(LM.WR_L) > 0.4 ? P(LM.WR_L) : null, wristR: vis(LM.WR_R) > 0.4 ? P(LM.WR_R) : null,
+    kneeL: vis(LM.KNEE_L) > 0.4 ? P(LM.KNEE_L) : null, kneeR: vis(LM.KNEE_R) > 0.4 ? P(LM.KNEE_R) : null,
+    ankleL: vis(LM.ANK_L) > 0.4 ? P(LM.ANK_L) : null, ankleR: vis(LM.ANK_R) > 0.4 ? P(LM.ANK_R) : null,
     // Head: eye-to-mouth distance does not change when the head turns, ear-to-ear distance does not change when it nods.
     eyeMid, earMid: mid(P(LM.EAR_L), P(LM.EAR_R)),
     headPx: Math.max(len(sub(mid(P(LM.MOUTH_L), P(LM.MOUTH_R)), eyeMid)), 0.42 * len(sub(P(LM.EAR_L), P(LM.EAR_R)))),
@@ -526,9 +542,10 @@ const linAt = (pts, y) => {
 };
 
 // Zone by zone: does this garment go round this body? spare = garment girth minus body girth, in cm.
-function fitReport(row, pr) {
-  const out = [];
-  for (const [zone, half, flat, ratio] of [["chest", pr.chest, row.chest, pr.rChest == null ? DEPTH_RATIO.chest : pr.rChest], ["waist", pr.waist, row.chest * 1.02, pr.rWaist == null ? DEPTH_RATIO.waist : pr.rWaist], ["hips", pr.hip, row.chest * 1.04, pr.rHip == null ? DEPTH_RATIO.hip : pr.rHip]]) {
+function fitReport(row, pr, type) {
+  const out = [], rr = (v, d) => (v == null ? d : v);
+  const zones = type === "trousers" ? [["waist", pr.waist, row.waist, rr(pr.rWaist, DEPTH_RATIO.waist)], ["hips", pr.hip, row.hip, rr(pr.rHip, DEPTH_RATIO.hip)]] : null;
+  for (const [zone, half, flat, ratio] of zones || [["chest", pr.chest, row.chest, pr.rChest == null ? DEPTH_RATIO.chest : pr.rChest], ["waist", pr.waist, row.chest * 1.02, pr.rWaist == null ? DEPTH_RATIO.waist : pr.rWaist], ["hips", pr.hip, row.chest * 1.04, pr.rHip == null ? DEPTH_RATIO.hip : pr.rHip]]) {
     if (half == null) continue;
     const girth = girthFromWidth(2 * half, ratio), spare = 2 * flat - girth;
     out.push({ zone, girth, spare, verdict: spare < 0 ? "too tight" : spare < 4 ? "snug" : spare <= 22 ? "fits" : "loose" });
@@ -608,7 +625,7 @@ function torsoTube(spec, nr, ny, body) {
 // its underarm seam. The underarm seam runs straight from the underarm point to the sleeve end, as a sewn seam does,
 // so the underside cannot sag or pinch when the arm is raised. The top edge curves over the shoulder onto the arm.
 // d is the arm direction in the picture plane; yaw is how far the torso has turned.
-function sleeveTube(spec, side, d, yaw, na, nr, body) {
+function sleeveTube(spec, side, d, yaw, na, nr, body, arm) {
   body = body || defaultBody(spec);
   const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3), uv = new Float32Array(cols * na * 2);
   const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
@@ -620,26 +637,86 @@ function sleeveTube(spec, side, d, yaw, na, nr, body) {
   const top = sub({ x: ah.top.x * cyaw, y: ah.top.y }, inset), pit = sub({ x: ah.pit.x * cyaw, y: ah.pit.y }, inset);
   const J = { x: side * body.jHalf * cyaw, y: body.lift };           // the wearer's shoulder point
   const under = { x: -d.y * side, y: d.x * side };                   // the arm's underside: faces the body with the arm down, the floor with it out
-  const r1 = 0.5 * spec.sleeveOpen, rz0 = 0.6 * half, L = spec.sleeve * 0.95 + 1.5;
+  // A long sleeve is built in two parts: armhole to elbow, then elbow to cuff along the forearm.
+  const long = !!(spec.long && arm), nUp = Math.min(na, 9);
   const s0 = Math.max(0, dot(sub(mid(top, pit), J), d));
+  const r1 = long ? spec.elbowR : 0.5 * spec.sleeveOpen, rz0 = 0.6 * half, L = long ? Math.max(6, arm.upper - s0) : spec.sleeve * 0.95 + 1.5;
   const end = add(J, mul(d, s0 + L)), endTop = sub(end, mul(under, r1)), endUnder = add(end, mul(under, r1));
   const cap = sub(add(J, mul(d, s0)), mul(under, r1 + 1));           // where the top edge turns from the shoulder onto the arm
-  for (let j = 0; j < na; j++) {
-    const a = j / (na - 1), b = 1 - a;
-    const T = { x: b * b * top.x + 2 * a * b * cap.x + a * a * endTop.x, y: b * b * top.y + 2 * a * b * cap.y + a * a * endTop.y };
-    const B = { x: pit.x + (endUnder.x - pit.x) * a, y: pit.y + (endUnder.y - pit.y) * a };
+  const ring = (j, T, B, rz, along) => {
     const c = mid(T, B), r = Math.max(0.5, len(sub(B, T)) / 2), e1 = norm(sub(B, T));
-    const ta = 1 - b * b * b, rz = rz0 + (r1 - rz0) * ta;
     for (let i = 0; i < cols; i++) {
       const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
       pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = -c0.x * syaw + rz * sn;
       const nx = e1.x * co * rz, ny = e1.y * co * rz, nz = sn * r, nl = Math.hypot(nx, ny, nz) || 1;
       nrm[n] = nx / nl; nrm[n + 1] = ny / nl; nrm[n + 2] = nz / nl;
-      g[n] = co; g[n + 1] = a; g[n + 2] = 1;
-      uv[(n / 3) * 2] = th * r; uv[(n / 3) * 2 + 1] = a * spec.sleeve;
+      g[n] = co; g[n + 1] = along; g[n + 2] = 1;
+      uv[(n / 3) * 2] = th * r; uv[(n / 3) * 2 + 1] = along * spec.sleeve;
+    }
+  };
+  let lastT = top, lastB = pit;
+  for (let j = 0; j < nUp; j++) {
+    const a = j / (nUp - 1), b = 1 - a;
+    const T = { x: b * b * top.x + 2 * a * b * cap.x + a * a * endTop.x, y: b * b * top.y + 2 * a * b * cap.y + a * a * endTop.y };
+    const B = { x: pit.x + (endUnder.x - pit.x) * a, y: pit.y + (endUnder.y - pit.y) * a };
+    const ta = 1 - b * b * b;
+    ring(j, T, B, rz0 + (r1 - rz0) * ta, long ? a * 0.5 : a); lastT = T; lastB = B;
+  }
+  if (long) {
+    // Forearm: from the elbow along the wearer's forearm, as far as the sleeve reaches, never much past the wrist.
+    const use = Math.max(2, Math.min(spec.sleeve - arm.upper, arm.fore + 1.5));
+    for (let j = nUp; j < na; j++) {
+      const q = (j - nUp + 1) / (na - nUp), w = smooth(0, 0.4, q);
+      const dd = norm({ x: d.x + (arm.d2.x - d.x) * w, y: d.y + (arm.d2.y - d.y) * w }), u2 = { x: -dd.y * side, y: dd.x * side };
+      const c = add(end, mul(arm.d2, use * q)), r = r1 + (spec.cuffR - r1) * q;
+      ring(j, sub(c, mul(u2, r)), add(c, mul(u2, r)), r, 0.5 + 0.5 * q);
+    }
+  } else for (let j = nUp; j < na; j++) ring(j, lastT, lastB, r1, 1);
+  return { pos, nrm, g, uv };
+}
+
+// ---- Trousers: a seat from waistband to crotch, and two legs that follow hip, knee and ankle. ----
+// All in centimetres, measured from the middle of the waistband: x across, y down.
+function trouserSeat(spec, nr, ny) {
+  const cols = nr + 1, pos = new Float32Array(cols * ny * 3), nrm = new Float32Array(cols * ny * 3), g = new Float32Array(cols * ny * 3), uv = new Float32Array(cols * ny * 2), fit = new Float32Array(cols * ny);
+  for (let j = 0; j < ny; j++) {
+    const t = j / (ny - 1), y = t * spec.rise, hw = spec.waistHalf + (spec.hipHalf - spec.waistHalf) * smooth(0, 0.7, t), hd = hw * 0.64;
+    for (let i = 0; i < cols; i++) {
+      const phi = -Math.PI + (2 * Math.PI * i) / nr, sx = Math.sin(phi), cz = Math.cos(phi), n = (j * cols + i) * 3;
+      pos[n] = hw * sx; pos[n + 1] = y; pos[n + 2] = hd * cz;
+      const nx = sx / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
+      nrm[n] = nx / nl; nrm[n + 1] = 0; nrm[n + 2] = nz / nl;
+      g[n] = sx; g[n + 1] = t * (spec.rise / spec.length); g[n + 2] = 0;
+      uv[(n / 3) * 2] = phi * hw; uv[(n / 3) * 2 + 1] = y;
     }
   }
-  return { pos, nrm, g, uv };
+  return { pos, nrm, g, uv, fit };
+}
+// limb: the wearer's hip joint, knee and ankle on this side, in the same centimetres (knee and ankle may be missing).
+function trouserLeg(spec, side, limb, yaw, na, nr) {
+  const cols = nr + 1, pos = new Float32Array(cols * na * 3), nrm = new Float32Array(cols * na * 3), g = new Float32Array(cols * na * 3), uv = new Float32Array(cols * na * 2);
+  const cyaw = Math.cos(yaw), syaw = Math.sin(yaw), x0 = side * 0.52 * spec.hipHalf;
+  const S0 = { x: x0 * cyaw, y: spec.rise - 7 };                       // where the leg leaves the seat
+  const H = limb.hip || { x: S0.x, y: spec.hipDrop }, K = limb.knee || add(H, { x: 0, y: 44 }), A = limb.ankle || add(K, mul(norm(sub(K, H)), 42));
+  const lenTh = Math.max(1, len(sub(K, H))), lenSh = Math.max(1, len(sub(A, K))), sH = Math.min(lenTh * 0.6, Math.max(0, S0.y - H.y));
+  const use = Math.max(10, Math.min(spec.length - S0.y, lenTh + lenSh - sH + 2));   // a leg longer than the wearer's stops at the ankle
+  const limbPt = (s) => { const q = sH + s; return q <= lenTh ? add(H, mul(sub(K, H), q / lenTh)) : add(K, mul(norm(sub(A, K)), q - lenTh)); };
+  const centre = (s) => { const w = smooth(0, 12, s), a = { x: S0.x, y: S0.y + s }, b = limbPt(s); return { x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w }; };
+  const sKnee = lenTh - sH, kneeR = 0.48 * (spec.thighR + spec.hemR);
+  for (let j = 0; j < na; j++) {
+    const q = j / (na - 1), s = use * q, c = centre(s), t = norm(sub(centre(Math.min(use, s + 2)), centre(Math.max(0, s - 2))));
+    const e1 = { x: -t.y * side, y: t.x * side };                      // across the leg, towards the inside seam
+    const r = s <= sKnee ? spec.thighR + (kneeR - spec.thighR) * (s / Math.max(1, sKnee)) : kneeR + (spec.hemR - kneeR) * Math.min(1, (s - sKnee) / Math.max(1, use - sKnee));
+    for (let i = 0; i < cols; i++) {
+      const th = (2 * Math.PI * i) / nr, co = Math.cos(th), sn = Math.sin(th), n = (j * cols + i) * 3;
+      pos[n] = c.x + e1.x * r * co; pos[n + 1] = c.y + e1.y * r * co; pos[n + 2] = -x0 * syaw + r * sn;
+      const nx = e1.x * co, ny = e1.y * co, nz = sn, nl = Math.hypot(nx, ny, nz) || 1;
+      nrm[n] = nx / nl; nrm[n + 1] = ny / nl; nrm[n + 2] = nz / nl;
+      g[n] = co; g[n + 1] = (S0.y + s) / spec.length; g[n + 2] = 1;
+      uv[(n / 3) * 2] = th * r; uv[(n / 3) * 2 + 1] = S0.y + s;
+    }
+  }
+  return { pos, nrm, g, uv, end: centre(use) };
 }
 
 // Body parts that sit in front of the garment, as tapered capsules in video pixels:
@@ -689,9 +766,9 @@ function gridIndex(nx, ny) {
 function turnAmount(ratio, widest) { return Math.acos(Math.min(1, Math.max(0, ratio / Math.max(1e-6, widest) / 0.96))); }
 
 // Smallest size in the chart that is not too tight anywhere. If none, the largest, with the zones that are short.
-function recommendSize(pr) {
+function recommendSize(pr, type) {
   let last = null;
-  for (const row of SIZE_CHART) { const rep = fitReport(row, pr); if (!rep.length) return null; last = { id: row.id, report: rep, short: rep.filter((z) => z.spare < 0) }; if (!last.short.length) return last; }
+  for (const row of SIZE_CHART) { const rep = fitReport(row, pr, type); if (!rep.length) return null; last = { id: row.id, report: rep, short: rep.filter((z) => z.spare < 0) }; if (!last.short.length) return last; }
   return last;
 }
 
@@ -727,10 +804,17 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "18 (can be embedded in a store page)";
+  const BUILD = "19 (shirt, kurta and trousers)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
+  // Example size charts for the bench, one per garment type. A shop sends its own.
+  const GARMENTS = {
+    tee: { label: "T-shirt", chart: SIZE_CHART.map((r) => ({ ...r })) },
+    shirt: { label: "Shirt", chart: [{ id: "S", chest: 53, length: 74, shoulder: 44, sleeve: 62 }, { id: "M", chest: 56, length: 76, shoulder: 46, sleeve: 63.5 }, { id: "L", chest: 60, length: 78, shoulder: 48.5, sleeve: 65 }, { id: "XL", chest: 64, length: 80, shoulder: 51, sleeve: 66 }] },
+    kurta: { label: "Kurta", chart: [{ id: "S", chest: 54, length: 98, shoulder: 44, sleeve: 59 }, { id: "M", chest: 57, length: 102, shoulder: 46, sleeve: 60.5 }, { id: "L", chest: 61, length: 106, shoulder: 48.5, sleeve: 62 }, { id: "XL", chest: 65, length: 110, shoulder: 51, sleeve: 63 }] },
+    trousers: { label: "Trousers", chart: [{ id: "S", waist: 38, hip: 50, length: 100, hem: 18 }, { id: "M", waist: 41, hip: 53, length: 102, hem: 18.5 }, { id: "L", waist: 44, hip: 56, length: 104, hem: 19 }, { id: "XL", waist: 47.5, hip: 59.5, length: 106, hem: 19.5 }] },
+  };
   const FABRICS = [["Brick", "#a8452f"], ["Navy", "#22355c"], ["Forest", "#2f6048"], ["Charcoal", "#2e3036"], ["Ecru", "#e6e1d3"]];
-  const NR = 28, NY = 18, NA = 9, NS = 14;
+  const NR = 28, NY = 18, NA = 16, NS = 14;
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -747,7 +831,7 @@ class OneEuro {
   };
 
   const state = {
-    sizeId: store.get("size", "M"), fabric: store.get("fabric", FABRICS[0][1]), mode: store.get("mode", "true"), pattern: store.get("pattern", "plain"), ease: 1,
+    sizeId: store.get("size", "M"), fabric: store.get("fabric", FABRICS[0][1]), mode: store.get("mode", "true"), garment: "tee", pattern: store.get("pattern", "plain"), ease: 1,
     heightCm: Number(store.get("height", 170)) || 170, fovLong: Number(store.get("fov", 67)) || 67,
     facing: "environment", mirrored: false, running: false, stream: null, track: null, delegate: "--",
     fps: 0, drawFps: 0, inferMs: 0, ppcVideo: null, metrics: null, hasPerson: false, lastSeen: 0,
@@ -759,7 +843,7 @@ class OneEuro {
   let torso = null, sleeveL = null, sleeveR = null, joints = null;
   const materials = [], yawSin = new OneEuro(1.2, 0.2), yawCos = new OneEuro(1.2, 0.2), hipSin = new OneEuro(1.2, 0.2), hipCos = new OneEuro(1.2, 0.2);
   let printTex = null;
-  let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5]);
+  let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5], "tee");
   const calib = new Calibrator();
   const filters = Array.from({ length: 33 }, () => [new OneEuro(1.5, 25), new OneEuro(1.5, 25)]);
   let ppcSmooth = null, lastVideoTime = -1, lastUi = 0, showJoints = false;
@@ -773,6 +857,13 @@ class OneEuro {
 
   function buildControls() {
     el.sizes.textContent = ""; el.swatches.textContent = "";
+    const gEl = $("garments"); gEl.textContent = "";
+    for (const type in GARMENTS) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = GARMENTS[type].label; b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(type === state.garment));
+      b.addEventListener("click", () => selectGarment(type));
+      gEl.append(b);
+    }
     if (!SIZE_CHART.some((r) => r.id === state.sizeId)) state.sizeId = SIZE_CHART[Math.min(1, SIZE_CHART.length - 1)].id;
     if (!FABRICS.some((f) => f[1] === state.fabric)) state.fabric = FABRICS[0][1];
     let lastKids = null;
@@ -798,10 +889,12 @@ class OneEuro {
   function selectSize(id) {
     const row = SIZE_CHART.find((r) => r.id === id) || SIZE_CHART[5];
     state.sizeId = row.id; store.set("size", row.id);
-    spec = garmentSpec(row);
+    spec = garmentSpec(row, state.garment);
     if (torso) setTorso();
     for (const b of el.sizes.querySelectorAll(".chip")) b.setAttribute("aria-checked", String(b.dataset.size === row.id));
-    el.factGarment.textContent = `${row.id}: chest ${row.chest * 2} around, shoulder ${row.shoulder}, length ${row.length}, sleeve ${row.sleeve} cm (${embed.product ? embed.product.name : "example chart"})`;
+    const src = embed.product ? embed.product.name : GARMENTS[state.garment].label + ", example chart";
+    el.factGarment.textContent = state.garment === "trousers" ? `${row.id}: waist ${row.waist * 2} around, hips ${row.hip * 2} around, length ${row.length}, hem ${row.hem} cm (${src})`
+      : `${row.id}: chest ${row.chest * 2} around, shoulder ${row.shoulder}, length ${row.length}, sleeve ${row.sleeve} cm (${src})`;
   }
   function hexToRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
   function selectFabric(hex) {
@@ -830,9 +923,10 @@ class OneEuro {
   function applyPrint() {
     $("printBtn").textContent = printTex ? "Remove chest print" : "Add chest print";
     if (!torso) return;
-    const u = torso.material.uniforms, halfW = 0.3 * spec.shHalf * 2, halfH = printTex ? halfW * printTex.userData.aspect : 1;
+    const u = torso.material.uniforms; if (spec.type === "trousers") { u.hasPrint.value = 0; return; }
+    const halfW = 0.3 * spec.shHalf * 2, halfH = printTex ? halfW * printTex.userData.aspect : 1;
     u.printTex.value = printTex; u.hasPrint.value = printTex ? 1 : 0;
-    u.printBox.value.set(0, spec.neckDrop + 3 + halfH, halfW, halfH);       // centred on the chest, 3 cm below the collar
+    u.printBox.value.set(0, spec.neckDrop + (spec.collar ? 7 : 3) + halfH, halfW, halfH);       // centred on the chest, 3 cm below the collar
   }
   function setMode(mode) {
     state.mode = mode === "fit" ? "fit" : "true"; store.set("mode", state.mode);
@@ -856,7 +950,7 @@ class OneEuro {
         fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
         capA: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, capB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, isTorso: { value: 0 },
         lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(1, 1, 1) },
-        grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
+        style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
         k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, back: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
@@ -881,7 +975,7 @@ class OneEuro {
         precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
-        uniform float pattern; uniform float loose; uniform float tight; uniform float grain;
+        uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -920,20 +1014,44 @@ class OneEuro {
           }
           col *= 0.97 + 0.06 * noise(vUv * 0.6);                                 // slight unevenness, as dyed cloth has
 
-          if (vG.z < 0.5) {
+          // style: x = collar (0 crew rib, 1 shirt collar, 2 band collar), y = placket length in cm, z = where side slits start, w = 1 for trousers
+          if (vG.z < 0.5 && style.w < 0.5) {
             float drop = vP.z > 0.0 ? neck.y : neck.z;      // deep at the front, shallow at the back
-            vec2 q0 = vec2(abs(vP.x), max(vP.y, 0.0));          // crew neck: flatter at the bottom than a circle
+            vec2 q0 = vec2(abs(vP.x), max(vP.y, 0.0));          // flatter at the bottom than a circle
             float e = pow(q0.x / neck.x, 2.6) + pow(q0.y / drop, 2.6);
             if (e < 1.0) discard;                           // neck opening
-            float e2 = pow(q0.x / (neck.x + 2.0), 2.6) + pow(q0.y / (drop + 2.0), 2.6);
-            if (e2 < 1.0 && !inside) {                      // 2 cm rib                       // collar rib, in the base colour
-              float rib = 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
-              gl_FragColor = vec4(fabric * lightCol * 0.8 * rib * (0.55 + 0.45 * n.z), aOut); return;
+            float bandW = style.x > 0.5 ? 2.8 : 2.0;
+            float e2 = pow(q0.x / (neck.x + bandW), 2.6) + pow(q0.y / (drop + bandW), 2.6);
+            if (e2 < 1.0 && !inside) {                      // crew rib, or the stand of a shirt or band collar
+              float rib = style.x > 0.5 ? 1.12 : 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
+              gl_FragColor = vec4(col * lightCol * 0.8 * rib * (0.55 + 0.45 * n.z), aOut); return;
+            }
+            if (vP.y > style.z && abs(vG.x) > 0.972) discard;     // side slits of a kurta
+            if (vP.z > 0.0 && !inside && style.y > 0.5) {
+              float ax = abs(vP.x);
+              if (vP.y > drop && vP.y < style.y) {            // button placket down the front
+                if (ax < 1.7) col *= 1.05;
+                if (abs(ax - 1.7) < 0.13) col *= 0.8;
+                float by = mod(vP.y - drop - 2.5, 9.0) - 4.5;
+                if (length(vec2(vP.x, by)) < 0.6) col = mix(col, vec3(0.9, 0.88, 0.84), 0.9);
+              }
+              if (style.x > 0.5 && style.x < 1.5) {          // the two points of a shirt collar
+                vec2 pA = vec2(neck.x + 2.2, -0.5), pB = vec2(0.3, drop + 1.2), pT = vec2(neck.x * 0.7 + 1.6, drop + 6.5), pp = vec2(ax, vP.y);
+                float d1 = (pB.x - pA.x) * (pp.y - pA.y) - (pB.y - pA.y) * (pp.x - pA.x);
+                float d2 = (pT.x - pB.x) * (pp.y - pB.y) - (pT.y - pB.y) * (pp.x - pB.x);
+                float d3 = (pA.x - pT.x) * (pp.y - pT.y) - (pA.y - pT.y) * (pp.x - pT.x);
+                if ((d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0) || (d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0)) col *= (min(abs(d2), abs(d3)) < 1.4 ? 0.82 : 1.1);
+              }
             }
             if (hasPrint > 0.5 && vP.z > 0.0 && !inside) {  // chest print, front only
               vec2 q = (vP.xy - printBox.xy) / printBox.zw;
               if (abs(q.x) < 1.0 && abs(q.y) < 1.0) { vec4 t = texture2D(printTex, vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5)); col = mix(col, t.rgb, t.a * 0.96); }
             }
+          }
+          if (vG.z < 0.5 && style.w > 0.5 && !inside) {     // trousers: waistband and fly
+            if (vP.y < 4.0) col *= 0.9;
+            if (abs(vP.y - 4.0) < 0.15) col *= 0.75;
+            if (vP.z > 0.0 && abs(vP.x - 1.2) < 0.14 && vP.y > 4.0 && vP.y < 19.0) col *= 0.78;
           }
 
           // Folds: a loose shirt hangs in soft vertical folds below the chest, a tight one pulls across it.
@@ -971,9 +1089,16 @@ class OneEuro {
     for (const [name, arr] of [["position", tube.pos], ["normal", tube.nrm], ["uv", tube.uv], ["fit", tube.fit]].filter((q) => q[1])) { const at = meshObj.geometry.getAttribute(name); at.array.set(arr); at.needsUpdate = true; }
   }
   function setTorso() {
-    torsoBody = null; setTube(torso, torsoTube(spec, NR, NY));
-    torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 1.5);
-    applyPrint();
+    const tr = spec.type === "trousers";
+    torsoBody = null; setTube(torso, tr ? trouserSeat(spec, NR, NY) : torsoTube(spec, NR, NY));
+    if (!tr) torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 1.5);
+    for (const mt of materials) mt.uniforms.style.value.set(tr ? 0 : spec.collar, tr ? 0 : spec.placket, tr ? 1e4 : spec.slitY, tr ? 1 : 0);
+    resetSwing(); applyPrint();
+  }
+  function selectGarment(type) {
+    if (!GARMENTS[type]) type = "tee";
+    state.garment = type; SIZE_CHART.length = 0; for (const r of GARMENTS[type].chart) SIZE_CHART.push({ ...r });
+    buildControls();
   }
   function initGraphics() {
     renderer = new THREE.WebGLRenderer({ canvas: el.canvas, alpha: true, antialias: true });
@@ -1036,7 +1161,7 @@ class OneEuro {
   function resetSwing() { swing.p = null; swing.yaw = null; swing.arm = [null, null]; swing.vx = swing.vy = swing.yawV = 0; swing.armV = [0, 0]; }
   function drawGarment(m, map, ppcScreen, ghost, yaw, yawHipIn, occ, dt) {
     const S = (p) => ({ x: p.x * map.s + map.ox, y: p.y * map.s + map.oy });
-    const ms = { ...m, L: S(m.L), R: S(m.R), sMid: S(m.sMid), hMid: S(m.hMid), hipL: S(m.hipL), hipR: S(m.hipR), elbowL: m.elbowL && S(m.elbowL), elbowR: m.elbowR && S(m.elbowR) };
+    const ms = screenMetrics(m, S);
     const axes = garmentAxes(ms), fr = bodyFrames(m, axes);
     // The tracked shoulder points are the joint centres; the top of the shoulder at the neck sits above that line.
     const lift = neckLift(m, axes.v) * map.s;
@@ -1067,6 +1192,7 @@ class OneEuro {
 
     aim(torso, O, fr.uTop, fr.uHip, axes.v, ppcScreen, yaw, yawHip, hipY, ghost);
     torso.material.uniforms.back.value = state.back ? 1 : 0;
+    const toG = toGarment(O, fr.uTop, axes.v, ppcScreen);
     torso.material.uniforms.sway.value.set(swayX, swayY, spec.armhole, spec.length);
     [[sleeveL, 1], [sleeveR, -1]].forEach(([meshObj, side], i) => {
       const d = armDir(ms, { u: fr.uTop, v: axes.v }, side), target = Math.atan2(d.y, d.x);
@@ -1074,10 +1200,27 @@ class OneEuro {
       swing.arm[i] = target + wrap(swing.arm[i] - target);
       [swing.arm[i], swing.armV[i]] = springStep(swing.arm[i], swing.armV[i], target, 3.0, 0.45, dt);
       const ang = target + clamp(swing.arm[i] - target, 0.35);
-      setTube(meshObj, sleeveTube(spec, side, { x: Math.cos(ang), y: Math.sin(ang) }, yaw, NA, NS, body));
+      // For a long sleeve: where the elbow and wrist are, in the garment's own centimetres.
+      const dUp = { x: Math.cos(ang), y: Math.sin(ang) }, sh = side > 0 ? ms.L : ms.R, eb = side > 0 ? ms.elbowL : ms.elbowR, wr = side > 0 ? ms.wristL : ms.wristR;
+      let arm = null;
+      if (spec.long && eb) { const Sg = toG(sh), Eg = toG(eb), Wg = wr ? toG(wr) : null; arm = { upper: Math.max(8, len(sub(Eg, Sg))), d2: Wg && len(sub(Wg, Eg)) > 3 ? norm(sub(Wg, Eg)) : dUp, fore: Wg ? len(sub(Wg, Eg)) : 25 }; }
+      setTube(meshObj, sleeveTube(spec, side, dUp, yaw, NA, NS, body, arm));
       aim(meshObj, O, fr.uTop, fr.uTop, axes.v, ppcScreen, 0, 0, 1, ghost);
       meshObj.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
     });
+    uploadOccluders(occ, map);
+  }
+  function screenMetrics(m, S) {
+    const o = { ...m };
+    for (const k of ["L", "R", "sMid", "hMid", "hipL", "hipR", "elbowL", "elbowR", "wristL", "wristR", "kneeL", "kneeR", "ankleL", "ankleR"]) o[k] = m[k] && S(m[k]);
+    return o;
+  }
+  // Turns a point on the screen into the garment's own centimetres (x across the body, y down it).
+  function toGarment(O, u, v, k) {
+    const det = u.x * v.y - u.y * v.x || 1;
+    return (P) => { const q = mul(sub(P, O), 1 / k); return { x: (q.x * v.y - q.y * v.x) / det, y: (u.x * q.y - u.y * q.x) / det }; };
+  }
+  function uploadOccluders(occ, map) {
     for (const mt of materials) {
       const A = mt.uniforms.capA.value, B = mt.uniforms.capB.value;
       for (let i = 0; i < 8; i++) {
@@ -1089,6 +1232,21 @@ class OneEuro {
       mt.uniforms.grain.value = (performance.now() % 1000) * 0.37;
       mt.uniforms.lightDir.value.set(light.x, -0.5, 0.75); mt.uniforms.lightCol.value.set(light.r, light.g, light.b);
     }
+  }
+  // Trousers hang from the hips: the waistband sits a little above the hip joints, and each leg follows its own knee and ankle.
+  function drawTrousers(m, map, ppcScreen, yawHip, occ) {
+    const S = (p) => ({ x: p.x * map.s + map.ox, y: p.y * map.s + map.oy }), ms = screenMetrics(m, S);
+    const axes = garmentAxes(ms), u = bodyFrames(m, axes).uHip, v = axes.v;
+    const O = sub(ms.hMid, mul(v, spec.hipDrop * ppcScreen)), toG = toGarment(O, u, v, ppcScreen);
+    aim(torso, O, u, u, v, ppcScreen, yawHip, yawHip, 1e4, false);
+    torso.material.uniforms.back.value = state.back ? 1 : 0; torso.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
+    for (const [meshObj, side] of [[sleeveL, 1], [sleeveR, -1]]) {
+      const hip = side > 0 ? ms.hipL : ms.hipR, knee = side > 0 ? ms.kneeL : ms.kneeR, ankle = side > 0 ? ms.ankleL : ms.ankleR;
+      setTube(meshObj, trouserLeg(spec, side, { hip: toG(hip), knee: knee ? toG(knee) : null, ankle: knee && ankle ? toG(ankle) : null }, yawHip, NA, NS));
+      aim(meshObj, O, u, u, v, ppcScreen, 0, 0, 1, false);
+      meshObj.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
+    }
+    uploadOccluders(occ, map);
   }
 
   /* ----- room light: sample the camera picture so the shirt is lit like the scene ----- */
@@ -1167,7 +1325,7 @@ class OneEuro {
   function showResult(title, body) { $("resultTitle").textContent = title; $("resultBody").textContent = body; el.result.hidden = false; }
   function measuredSummary() {
     const pr = shapeProfile(null); if (!pr || !pr.measured) return null;
-    const rec = recommendSize(pr), g = Object.fromEntries(rec.report.map((z) => [z.zone, z.girth]));
+    const rec = recommendSize(pr, state.garment), g = Object.fromEntries(rec.report.map((z) => [z.zone, z.girth]));
     const sizes = ["chest", "waist", "hips"].filter((z) => g[z] != null).map((z) => `${z[0].toUpperCase() + z.slice(1)} ${fmt(g[z], 0)} cm`).join(" · ");
     const note = rec.short.length ? `No size in this chart goes round the ${rec.short.map((z) => z.zone).join(" and ")}; ${rec.id} is the closest, ${rec.short.map((z) => fmt(-z.spare, 0) + " cm short at the " + z.zone).join(", ")}.` : `Suggested size: ${rec.id}.`;
     return { rec, sizes, note };
@@ -1283,7 +1441,7 @@ class OneEuro {
   }
   function fitText() {
     if (state.mode !== "true" || !calib.locked) return "Shown when the scale is set";
-    const row = SIZE_CHART.find((r) => r.id === state.sizeId), pr = shapeProfile(null), rep = fitReport(row, pr);
+    const row = SIZE_CHART.find((r) => r.id === state.sizeId), pr = shapeProfile(null), rep = fitReport(row, pr, state.garment);
     const parts = rep.map((z) => z.zone + " " + z.verdict + (z.verdict === "too tight" ? " (" + fmt(-z.spare, 0) + " cm short)" : ""));
     const missing = pr.waist == null || pr.hip == null;
     if (pr.measured) return parts.join(", ") + ". Measured all round from your turn, over current clothing.";
@@ -1437,7 +1595,7 @@ class OneEuro {
     }
     pose.target = lm; pose.world = w || null;
     // Ease: garment shoulder width against the wearer's. Above 1 the shirt is loose, below 1 it pulls.
-    state.ease = state.mode === "true" && calib.locked ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
+    state.ease = state.mode === "true" && calib.locked && spec.shoulder ? spec.shoulder / (calib.shoulderCm * SEAM_OVER_JOINTS) : 1.08;
     if (!Number.isFinite(state.ease)) state.ease = 1.08;
     calib.add(m, state.heightCm);
     sampleLight(now);
@@ -1471,20 +1629,23 @@ class OneEuro {
     const lm = pose.lm, m = bodyMetrics(lm, vw, vh); state.metrics = m;
     updateGuide(m, now);
 
-    if (!m.shouldersOk) { hideGarment(); resetSwing(); setPill("warn", "Shoulders not visible"); }
+    const tr = spec.type === "trousers";
+    if (tr ? !m.hipsOk : !m.shouldersOk) { hideGarment(); resetSwing(); setPill("warn", tr ? "Hips not visible" : "Shoulders not visible"); }
     else {
-      const fitPpc = (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
+      // Fit to body: trousers are scaled from the hips, everything else from the shoulders.
+      const fitPpc = tr ? (Math.max(len(sub(m.hipL, m.hipR)), 0.36 * m.torsoPx) * 2.0) / (spec.hipHalf * 2) : (SEAM_OVER_JOINTS * effectiveShoulderPx(m)) / (spec.shHalf * 2);
       const trueSize = state.mode === "true" && pose.ppc;
       const usePpc = trueSize ? pose.ppc : fitPpc;
       // Body parts in front of the shirt fade in and out over a moment instead of switching, which removes flicker.
       // Seen from behind, the arms cannot be in front of the shirt's back, so they are never cut out of it.
-      const found = occluders(lm, pose.world, vw, vh, m, spec.sleeve * 0.92 * usePpc), kOcc = 1 - Math.exp(-dt * 9);
+      const found = occluders(lm, pose.world, vw, vh, m, tr || spec.long ? 1e6 : spec.sleeve * 0.92 * usePpc), kOcc = 1 - Math.exp(-dt * 9);
+      if (spec.long) for (const c of found) if (c[8] === 3 || c[8] === 6) c[7] = 1;   // a sleeved forearm crossing the body covers the shirt front, and is itself covered by its sleeve
       for (let i = 0; i < 8; i++) {
         const c = found.find((q) => q[8] === i), target = c ? (state.back && i >= 2 ? 0 : c[6]) : 0, prev = occSlots[i];
         if (c) occSlots[i] = c.slice(0, 8).concat([i]), occSlots[i][6] = prev ? prev[6] + kOcc * (target - prev[6]) : i < 2 ? target : 0;
         else if (prev) { prev[6] += kOcc * (0 - prev[6]); if (prev[6] < 0.02) occSlots[i] = null; }
       }
-      drawGarment(m, map, usePpc * map.s, false, pose.yaw, pose.yawHip, occSlots, dt);
+      if (tr) drawTrousers(m, map, usePpc * map.s, pose.yawHip, occSlots); else drawGarment(m, map, usePpc * map.s, false, pose.yaw, pose.yawHip, occSlots, dt);
       if (state.mode === "fit") setPill("warn", "Fit to body: not to scale");
       else if (trueSize) setPill(calib.exact ? "ok" : "warn", calib.exact ? "True size, scale set" : "True size, approximate");
       else setPill("warn", "Fitted to body until measured");
@@ -1527,7 +1688,7 @@ class OneEuro {
     el.meter.style.whiteSpace = "pre";
     if (calib.locked) {
       const pr = shapeProfile(null), wd = (x) => (x == null ? "--" : fmt(2 * x, 0));
-      const row = SIZE_CHART.find((r) => r.id === state.sizeId), around = pr && pr.measured ? fitReport(row, pr).map((z) => `${z.zone} ${fmt(z.girth, 0)}`).join(", ") : "";
+      const row = SIZE_CHART.find((r) => r.id === state.sizeId), around = pr && pr.measured ? fitReport(row, pr, state.garment).map((z) => `${z.zone} ${fmt(z.girth, 0)}`).join(", ") : "";
       el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (around ? `; around: ${around} cm` : pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
     }
     el.factFit.textContent = fitText();
@@ -1608,8 +1769,11 @@ class OneEuro {
       const pd = ev.data.product; if (!pd || !Array.isArray(pd.chart) || !pd.chart.length) return;
       embed.product = { name: String(pd.name || "Garment").slice(0, 60) };
       const num = (x, lo, hi, d) => { const n = Number(x); return n >= lo && n <= hi ? n : d; };
+      state.garment = GARMENTS[pd.type] ? pd.type : "tee";
       SIZE_CHART.length = 0;
-      for (const r of pd.chart.slice(0, 12)) SIZE_CHART.push({ id: String(r.id).slice(0, 8), kids: !!r.kids, chest: num(r.chest, 20, 90, 50), length: num(r.length, 25, 110, 70), shoulder: num(r.shoulder, 18, 70, 45), sleeve: num(r.sleeve, 5, 70, 20) });
+      for (const r of pd.chart.slice(0, 12)) SIZE_CHART.push(state.garment === "trousers"
+        ? { id: String(r.id).slice(0, 8), kids: !!r.kids, waist: num(r.waist, 15, 80, 40), hip: num(r.hip, 20, 90, 52), length: num(r.length, 30, 125, 100), hem: num(r.hem, 8, 40, 18) }
+        : { id: String(r.id).slice(0, 8), kids: !!r.kids, chest: num(r.chest, 20, 90, 50), length: num(r.length, 25, 130, 70), shoulder: num(r.shoulder, 18, 70, 45), sleeve: num(r.sleeve, 5, 75, 20) });
       const cols = (pd.colours || []).filter((c) => /^#[0-9a-f]{6}$/i.test(c.hex)).slice(0, 8);
       if (cols.length) { FABRICS.length = 0; for (const c of cols) FABRICS.push([String(c.name || c.hex).slice(0, 20), c.hex]); }
       if (pd.size && SIZE_CHART.some((r) => r.id === pd.size)) state.sizeId = pd.size;
