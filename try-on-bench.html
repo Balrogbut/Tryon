@@ -84,7 +84,9 @@ button { cursor: pointer; }
 .stage.measuring #sheetBody { display: none !important; }
 .row.embed-bar { display: none; }
 .stage.embed .row.embed-bar { display: flex; }
-.stage.embed #patterns, .stage.embed #clothRow, .stage.embed #garments, .stage.embed #openProbe, .stage.embed #turnRow { display: none; }
+.stage.embed #patterns, .stage.embed #clothRow, .stage.embed #garments, .stage.embed #openProbe, .stage.embed #turnRow, .stage.embed .facts, .stage.embed .seg, .stage.embed #meter, .stage.embed #pill, .stage.embed #tape { display: none !important; }
+.stage.embed .sizechip { left: var(--gutter-l, 12px); right: auto; top: calc(14px + env(safe-area-inset-top, 0px)); max-width: 86%; text-align: left; font-size: 15px; padding: 9px 12px; }
+.sizechip[data-level="fit"] { background: #2f8f62; color: #fff; }
 .stage.embed #turnRowEmbed { display: flex; }
 #turnRowEmbed { display: none; }
 .hint span { padding: 6px 11px; border-radius: 8px; background: rgba(16, 20, 27, .78); border: 1px solid var(--line); font-size: 13px; line-height: 1.3; max-width: 34ch; }
@@ -858,7 +860,7 @@ class Cloth {
   constructor(nr, ny) {
     this.nr = nr; this.ny = ny; const n = nr * ny;
     this.x = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.r = new Float32Array(n * 3);
-    this.n0 = new Float32Array(n * 3); this.n1 = new Float32Array(n * 3);
+    this.n0 = new Float32Array(n * 3); this.n1 = new Float32Array(n * 3); this.s = new Float32Array(n * 3); this.s2 = new Float32Array(n * 3);
     this.pin = new Uint8Array(n); this.cut = new Uint8Array(n); this.geo = new Float32Array(n); this.anchor = new Int32Array(n);
     this.ready = false; this.fab = fabricPhysics(null); this.A = this.B = this.K = null; this.L = null;
   }
@@ -964,7 +966,21 @@ class Cloth {
   // Writes the cloth into a drawing buffer with nr + 1 columns. The shading keeps the garment's own normals and adds
   // only what the cloth's movement changed, so a garment at rest looks exactly as it did.
   write(posOut, nrmOut, nrmBase, gain) {
-    const { nr, ny, x, n0, n1 } = this, cols = nr + 1;
+    const { nr, ny, r, n0, n1, pin, cut } = this, cols = nr + 1, n = nr * ny;
+    // What is drawn is the cloth's movement with the small bumps evened out: cloth is smooth at the scale of a hand,
+    // and bumps the size of one grid cell come from the grid, not from the fabric.
+    let a = this.s, b = this.s2;
+    for (let q = 0; q < n * 3; q++) a[q] = this.x[q] - r[q];
+    for (let pass = 0; pass < 2; pass++) {
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nr; i++) {
+        const c = j * nr + i;
+        if (pin[c]) { b[c * 3] = b[c * 3 + 1] = b[c * 3 + 2] = 0; continue; }
+        const il = (i + nr - 1) % nr, l = cut[j * nr + il] ? c : j * nr + il, rt = cut[c] ? c : j * nr + ((i + 1) % nr), u = c - nr, d = j < ny - 1 ? c + nr : c;
+        for (let k = 0; k < 3; k++) b[c * 3 + k] = 0.36 * a[c * 3 + k] + 0.16 * (a[l * 3 + k] + a[rt * 3 + k] + a[u * 3 + k] + a[d * 3 + k]);
+      }
+      const t = a; a = b; b = t;
+    }
+    const x = b; for (let q = 0; q < n * 3; q++) x[q] = r[q] + a[q];
     this.normals(x, n1);
     for (let j = 0; j < ny; j++) for (let i = 0; i < cols; i++) {
       const s = (j * nr + (i % nr)) * 3, d = (j * cols + i) * 3;
@@ -980,6 +996,38 @@ function clothLayout(spec, nr, ny) {
   let pinRows = 1, slitRow = ny;
   for (let j = 0; j < ny; j++) { const y = (j / (ny - 1)) * spec.length; if (y < spec.armhole + 3) pinRows = j + 1; if (y > spec.slitY && slitRow === ny) slitRow = j; }
   return { pinRows, slitRow, slitCols: slitRow < ny && nr % 4 === 0 ? [nr / 4 - 1, (3 * nr) / 4 - 1] : [] };
+}
+
+// One plain verdict on the size being tried: fits, too small or too big, where, and which size to try instead.
+// who: { shoulderCm, torsoCm } from the scale (shoulderCm is the distance between the shoulder points); pr: the
+// measured outline if there is one. Shoulders alone give a first verdict for tops; chest, waist and hips refine it.
+function sizeJudge(row, type, who, pr) {
+  const zones = pr ? fitReport(row, pr, type) : [];
+  if (type === "trousers") {
+    if (!zones.length) return { level: "unknown", where: "" };
+    const tight = zones.filter((z) => z.spare < 0), loose = zones.every((z) => z.spare > 14);
+    return tight.length ? { level: "small", where: "tight at the " + tight.map((z) => z.zone).join(" and ") } : loose ? { level: "big", where: "loose at the waist and hips" } : { level: "fit", where: "" };
+  }
+  if (!who || !(who.shoulderCm > 0)) return { level: "unknown", where: "" };
+  const e = row.shoulder / (who.shoulderCm * SEAM_OVER_JOINTS), tight = zones.filter((z) => z.spare < 0);
+  if (tight.length) return { level: "small", where: "tight at the " + tight.map((z) => z.zone).join(" and ") };
+  if (e < 0.92) return { level: "small", where: "narrow at the shoulders" };
+  if (e > 1.16) return { level: "big", where: "wide at the shoulders" };
+  if (zones.length >= 2 && zones.every((z) => z.spare > 22) && e > 1.06) return { level: "big", where: "loose all round" };
+  return { level: "fit", where: "" };
+}
+function sizeVerdict(chart, sizeId, type, who, pr) {
+  const row = chart.find((r) => r.id === sizeId); if (!row) return { level: "unknown", text: "", best: null };
+  const j = sizeJudge(row, type, who, pr);
+  if (j.level === "unknown") return { level: "unknown", text: "", best: null };
+  const fits = chart.filter((r) => sizeJudge(r, type, who, pr).level === "fit");
+  if (j.level === "fit") return { level: "fit", text: `${row.id} fits`, best: row.id };
+  // the nearest size that fits; if none does, the end of the range on the right side
+  const at = chart.indexOf(row), near = fits.slice().sort((a, b) => Math.abs(chart.indexOf(a) - at) - Math.abs(chart.indexOf(b) - at))[0];
+  const end = j.level === "small" ? chart[chart.length - 1] : chart[0], best = near || (end !== row ? end : null);
+  const what = j.level === "small" ? "too small" : "too big";
+  const tail = near ? `Try ${near.id}.` : best ? `${best.id} is closer, but still ${what}.` : j.level === "small" ? "This is the largest size." : "This is the smallest size.";
+  return { level: j.level, text: `${row.id} is ${what}: ${j.where}. ${tail}`, best: best ? best.id : null };
 }
 
 // A point that follows a target like something hanging from it: it lags, overshoots a little and settles.
@@ -1014,7 +1062,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "24 (no false turn with arms out; cloth lies along a raised arm)";
+  const BUILD = "25 (cleaner garment, plain size verdict)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1055,6 +1103,7 @@ class OneEuro {
   let printTex = null;
   let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5], "tee");
   const calib = new Calibrator();
+  state.calib = calib;   // for the test harness
   const filters = Array.from({ length: 33 }, () => [new OneEuro(1.5, 25), new OneEuro(1.5, 25)]);
   let ppcSmooth = null, lastVideoTime = -1, lastUi = 0, showJoints = false;
 
@@ -1242,7 +1291,6 @@ class OneEuro {
             float h1 = noise(vUv * vec2(9.0, 2.2)), h2 = noise(vUv * vec2(26.0, 7.0));   // short flecks running down the knit
             col = fabric * (0.84 + 0.3 * h1 + 0.14 * h2);
           }
-          col *= 0.97 + 0.06 * noise(vUv * 0.6);                                 // slight unevenness, as dyed cloth has
 
           // style: x = collar (0 crew rib, 1 shirt collar, 2 band collar), y = placket length in cm, z = where side slits start, w = 1 for trousers
           if (vG.z < 0.5 && style.w < 0.5) {
@@ -1290,11 +1338,11 @@ class OneEuro {
           float fold = cos(vUv.x * 0.42 * fq + 1.4 * sin(vUv.y * 0.08)) * 0.6 + cos(vUv.x * 0.9 * fq - vUv.y * 0.05 + 2.0) * 0.4;
           float pull = cos(vUv.y * 1.1 + 0.8 * sin(vUv.x * 0.16));
           float looseL = smoothstep(0.0, 0.2, -vFit), tightL = smoothstep(0.0, 0.1, vFit);   // per zone: chest, waist and hips can differ
-          float relief = isTorso > 0.5 ? (0.035 + 0.11 * looseL) * mix(1.3, 0.6, drape) * fold * below + 0.05 * tightL * pull * (0.5 + 0.5 * noise(vUv * 0.15)) : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
+          float relief = isTorso > 0.5 ? (0.015 + 0.075 * looseL) * mix(1.3, 0.6, drape) * fold * below + 0.035 * tightL * pull : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
-          float shade = inside ? 0.34 : 0.4 + 0.56 * diff;
+          float shade = inside ? 0.36 : 0.52 + 0.44 * diff;      // soft, even light: the form shows without hard shadows
           col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 0.86);          // a camera never shows cloth at full saturation
           col += (hash(gl_FragCoord.xy + grain) - 0.5) * 0.035;                      // sensor grain, so it sits in the picture
           shade *= 1.0 - 0.07 * vG.y;
@@ -1474,7 +1522,7 @@ class OneEuro {
     }
     cloth.step(dt, { g: [981 * u.y * c, 981 * v.y, 981 * fb * u.y * s], shift, body: torsoNow.body, bodyEnd: hipY + 4, caps, legY: hipY - 4 });
     const geo = torso.geometry, pa = geo.getAttribute("position"), na = geo.getAttribute("normal");
-    cloth.write(pa.array, na.array, torsoNow.nrm, 1.5); pa.needsUpdate = na.needsUpdate = true;
+    cloth.write(pa.array, na.array, torsoNow.nrm, 1.0); pa.needsUpdate = na.needsUpdate = true;
     state.clothMove = cloth.maxMove();
     if (state.clothMove > 0.55 * spec.length) { cloth.reset(); state.clothResets = (state.clothResets || 0) + 1; }   // tangled beyond anything real cloth does: let it fall afresh
     state.clothMs += 0.1 * (performance.now() - t0 - state.clothMs);
@@ -1740,6 +1788,7 @@ class OneEuro {
       else if (calib.locked) text = "Approximate size. Step back once so head and feet show, for an exact one.";
       else if (m && (m.upper || m.upright)) text = "Measuring. Hold still for a moment.";
       else if (m) text = "Face the camera with head and hips in view.";
+      else if (embed.on) text = "Stand where the camera can see you.";
     }
     if (text === hintKey) return; hintKey = text;
     el.hint.hidden = !text; el.hintText.textContent = text;
@@ -1970,10 +2019,13 @@ class OneEuro {
       el.factBody.textContent = `shoulder points ${fmt(calib.shoulderCm, 0)} cm apart, shoulder to hip ${fmt(calib.torsoCm, 0)} cm` + (around ? `; around: ${around} cm` : pr ? `, waist ${wd(pr.waist)} cm wide, hips ${wd(pr.hip)} cm wide` : "");
     }
     el.factFit.textContent = fitText();
-    // Suggested size, shown on the picture and marked in the size row, once the wearer has been measured.
-    const sm = state.mode === "true" && calib.locked ? measuredSummary() : null, chipText = sm && el.result.hidden && !turn.on ? (sm.rec.short.length ? `Closest size ${sm.rec.id}: short at ${sm.rec.short.map((z) => z.zone).join(", ")}` : `Your size: ${sm.rec.id}`) : "";
+    // One plain verdict on the size being tried, shown on the picture; the size to try is marked in the size row.
+    const vd = state.mode === "true" && calib.locked && !calib.heightDoubt ? sizeVerdict(SIZE_CHART, state.sizeId, state.garment, { shoulderCm: calib.shoulderCm, torsoCm: calib.torsoCm }, shapeProfile(null)) : { level: "unknown", text: "", best: null };
+    state.verdict = vd;
+    const chipText = el.result.hidden && !turn.on ? vd.text : "";
     if (el.sizeChip.textContent !== chipText) { el.sizeChip.textContent = chipText; el.sizeChip.hidden = !chipText; }
-    for (const b of el.sizes.querySelectorAll(".chip")) b.classList.toggle("suggested", !!sm && b.dataset.size === sm.rec.id);
+    el.sizeChip.dataset.level = vd.level;
+    for (const b of el.sizes.querySelectorAll(".chip")) b.classList.toggle("suggested", !!vd.best && b.dataset.size === vd.best);
     if (!el.probe.hidden) renderProbe();
   }
   function probeFacts() {
@@ -2041,8 +2093,9 @@ class OneEuro {
   /* ----- embedded in a store page: the store sends the product, this page reports the size back ----- */
   if (embed.on) {
     el.stage.classList.add("embed");
+    setMode("true");                                    // shoppers always see the true size
     const tell = (msg) => { try { parent.postMessage(msg, location.origin); } catch { /* not embedded */ } };
-    const currentSize = () => { const sm = state.mode === "true" && calib.locked ? measuredSummary() : null; return { size: state.sizeId, colour: state.fabric, suggested: sm ? sm.rec.id : null, fit: el.factFit.textContent }; };
+    const currentSize = () => { const vd = state.verdict || {}; return { size: state.sizeId, colour: state.fabric, suggested: vd.best || null, fit: vd.text || "" }; };
     window.addEventListener("message", (ev) => {
       if (ev.origin !== location.origin || !ev.data || ev.data.type !== "tryon:config") return;
       const pd = ev.data.product; if (!pd || !Array.isArray(pd.chart) || !pd.chart.length) return;

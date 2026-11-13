@@ -214,7 +214,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
         <p class="note" id="fabricLine">Fabric: ${esc(S.fabricText(p))}</p>
         <div><span class="label">Colour: ${esc(colourName(p, st.colour))}</span><div class="swatches" role="radiogroup" aria-label="Colour">${p.colours.map((c) => `<button class="sw" role="radio" aria-checked="${c.hex === st.colour}" aria-label="${esc(c.name)}" title="${esc(c.name)}" style="background:${esc(c.hex)}" data-act="colour" data-v="${esc(c.hex)}"></button>`).join("")}</div></div>
         <div><span class="label">Size</span><div class="sizes" role="radiogroup" aria-label="Size">${p.chart.map((r) => `<button class="sz${r.id === st.suggested ? " suggested" : ""}" role="radio" aria-checked="${r.id === st.size}" data-act="size" data-v="${esc(r.id)}" ${stockOf(p, r.id) ? "" : "disabled"}>${esc(r.id)}</button>`).join("")}</div>
-          ${st.suggested ? `<p class="note ok" style="margin-top:8px">Your measured size is ${esc(st.suggested)}.</p>` : ""}</div>
+          ${st.suggested ? `<p class="note ok" style="margin-top:8px">The try-on suggests ${esc(st.suggested)}.</p>` : ""}</div>
         <dl class="measures" aria-label="Measurements of size ${esc(row.id)}">
           ${S.fields(S.typeOf(p)).map((f) => `<div><dt>${f.label}</dt><dd>${f.round ? row[f.k] * 2 : row[f.k]} <small>cm${f.round ? " round" : ""}</small></dd></div>`).join("")}
         </dl>
@@ -264,7 +264,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: s
   let fitting = null;
   function openTryOn(p) {
     fitting = p; const f = $("fitFrame"); $("fitting").hidden = false; document.body.style.overflow = "hidden";
-    f.src = "try-on-bench.html?v=24#embed";
+    f.src = "try-on-bench.html?v=25#embed";
   }
   function closeTryOn() { $("fitting").hidden = true; $("fitFrame").src = "about:blank"; document.body.style.overflow = ""; fitting = null; }
   window.addEventListener("message", (ev) => {
