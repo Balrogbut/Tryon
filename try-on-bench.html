@@ -998,6 +998,39 @@ function clothLayout(spec, nr, ny) {
   return { pinRows, slitRow, slitCols: slitRow < ny && nr % 4 === 0 ? [nr / 4 - 1, (3 * nr) / 4 - 1] : [] };
 }
 
+// ----- Light: the cloth is lit like the scene it is drawn into -----
+// Works in linear light (what the camera sensor saw), not in the picture's gamma-coded numbers.
+const TO_LIN = (() => { const t = new Float32Array(256); for (let i = 0; i < 256; i++) t[i] = Math.pow(i / 255, 2.2); return t; })();
+// px: RGBA bytes of a small copy of the camera picture, w x h. box: where the wearer is, [x0, y0, x1, y1] in 0..1.
+// level is how bright a white cloth would be in this picture (1 = the picture's white): the camera exposes so that
+// an average scene sits near 20% of white, and nothing drawn should outshine the brightest things in view. When the
+// wearer stands in a darker or brighter part of the scene than the rest, the level follows them.
+// tint is the colour of the light, side is which way it comes from across the picture (-1 left .. 1 right).
+function sceneLight(px, w, h, box) {
+  const n = w * h, lum = new Float32Array(n); let r = 0, g = 0, b = 0, sum = 0, sL = 0, sR = 0, loc = 0, locN = 0;
+  const bx = box ? [box[0] * w, box[1] * h, box[2] * w, box[3] * h] : null;
+  for (let i = 0; i < n; i++) {
+    const R = TO_LIN[px[i * 4]], G = TO_LIN[px[i * 4 + 1]], B = TO_LIN[px[i * 4 + 2]], l = 0.2126 * R + 0.7152 * G + 0.0722 * B, x = i % w, y = (i / w) | 0;
+    lum[i] = l; sum += l; r += R; g += G; b += B; if (x < w / 2) sL += l; else sR += l;
+    if (bx && x + 1 > bx[0] && x < bx[2] && y + 1 > bx[1] && y < bx[3]) { loc += l; locN++; }
+  }
+  const avg = Math.max(1e-4, sum / n), sorted = Float32Array.from(lum).sort(), p90 = sorted[Math.floor(n * 0.9)];
+  const cl = (v, a, z) => Math.min(z, Math.max(a, v));
+  let level = cl(Math.max(p90, avg / 0.22), 0.1, 1);
+  if (locN >= 4) level = cl(level * Math.pow(cl(loc / locN / avg, 0.3, 1.6), 0.6), 0.08, 1);
+  const m = Math.max(1e-4, (r + g + b) / 3);
+  return { level, tint: [cl(r / m, 0.85, 1.15), cl(g / m, 0.85, 1.15), cl(b / m, 0.85, 1.15)], side: cl(((sR - sL) / Math.max(1e-4, sR + sL)) * 3, -0.7, 0.7) };
+}
+// The wearer's own face shows how the light falls on them: a face is the same colour on both sides, so the
+// difference between its two halves is the light. px: a small square copy of the face, w x h.
+// side: which side is lit (-1 left of the picture .. 1 right); contrast: 0 for flat light, towards 0.5 for hard side light.
+function faceLight(px, w, h) {
+  let L = 0, R = 0;
+  for (let i = 0; i < w * h; i++) { const l = 0.2126 * TO_LIN[px[i * 4]] + 0.7152 * TO_LIN[px[i * 4 + 1]] + 0.0722 * TO_LIN[px[i * 4 + 2]]; if (i % w < w / 2) L += l; else R += l; }
+  const d = (R - L) / Math.max(1e-4, R + L);
+  return { side: Math.max(-0.8, Math.min(0.8, d * 3)), contrast: Math.min(0.5, Math.abs(d)) };
+}
+
 // One plain verdict on the size being tried: fits, too small or too big, where, and which size to try instead.
 // who: { shoulderCm, torsoCm } from the scale (shoulderCm is the distance between the shoulder points); pr: the
 // measured outline if there is one. Shoulders alone give a first verdict for tops; chest, waist and hips refine it.
@@ -1062,7 +1095,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "26 (soft edges)";
+  const BUILD = "27 (cloth lit like the scene)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1228,7 +1261,7 @@ class OneEuro {
       uniforms: {
         fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
         capA: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, capB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, isTorso: { value: 0 },
-        lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(1, 1, 1) },
+        lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(0.8, 0.8, 0.8) }, amb: { value: 0.62 },
         style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 }, drape: { value: state.cloth ? state.cloth.stiff : 0.32 }, feather: { value: 2.5 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
@@ -1253,7 +1286,7 @@ class OneEuro {
       fragmentShader: `
         precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
-        uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
+        uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol; uniform float amb;
         uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style; uniform float drape; uniform float feather;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
@@ -1309,7 +1342,7 @@ class OneEuro {
             float e2 = pow(q0.x / (neck.x + bandW), 2.6) + pow(q0.y / (drop + bandW), 2.6);
             if (e2 < 1.0 && !inside) {                      // crew rib, or the stand of a shirt or band collar
               float rib = style.x > 0.5 ? 1.12 : 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
-              gl_FragColor = vec4(col * lightCol * 0.8 * rib * (0.55 + 0.45 * n.z), aOut); return;
+              gl_FragColor = vec4(pow(pow(max(col, 0.0), vec3(2.2)) * lightCol * 0.72 * rib * (amb + (1.0 - amb) * n.z), vec3(0.4545)), aOut); return;
             }
             if (vP.y > style.z && abs(vG.x) > 0.995) discard;     // side slits of a kurta
             if (vP.z > 0.0 && !inside && style.y > 0.5) {
@@ -1349,13 +1382,15 @@ class OneEuro {
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
-          float shade = inside ? 0.36 : 0.52 + 0.44 * diff;      // soft, even light: the form shows without hard shadows
+          // amb is how much of the light reaches every side (flat, overcast light) rather than coming from one direction
+          float shade = inside ? 0.55 * amb : amb + (1.0 - amb) * diff * 1.15;
           col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 0.86);          // a camera never shows cloth at full saturation
-          col += (hash(gl_FragCoord.xy + grain) - 0.5) * 0.035;                      // sensor grain, so it sits in the picture
-          shade *= 1.0 - 0.07 * vG.y;
-          if (!inside) shade *= 1.0 + relief;
-          if (vG.y > 0.955 && vG.y < 0.972) shade *= 0.9;   // stitch line above the hem and sleeve ends
-          gl_FragColor = vec4(col * lightCol * shade, aOut);
+          shade *= 1.0 - 0.12 * vG.y;
+          if (!inside) shade *= 1.0 + 1.8 * relief;
+          if (vG.y > 0.955 && vG.y < 0.972) shade *= 0.8;   // stitch line above the hem and sleeve ends
+          // Light is applied in linear light and coded back for the screen, as the camera does with the real scene.
+          vec3 lit = pow(max(col, 0.0), vec3(2.2)) * lightCol * shade;
+          gl_FragColor = vec4(pow(lit, vec3(0.4545)) + (hash(gl_FragCoord.xy + grain) - 0.5) * 0.03, aOut);
         }`,
     });
     materials.push(mt); return mt;
@@ -1554,7 +1589,7 @@ class OneEuro {
         B[i].set(c[4] * map.s, c[5] * map.s, c[6], c[7]);
       }
       mt.uniforms.grain.value = (performance.now() % 1000) * 0.37;
-      mt.uniforms.lightDir.value.set(light.x, -0.5, 0.75); mt.uniforms.lightCol.value.set(light.r, light.g, light.b);
+      mt.uniforms.lightDir.value.set(light.x, -0.5, 0.75); mt.uniforms.lightCol.value.set(light.r, light.g, light.b); mt.uniforms.amb.value = light.amb;
     }
   }
   // Trousers hang from the hips: the waistband sits a little above the hip joints, and each leg follows its own knee and ankle.
@@ -1574,32 +1609,30 @@ class OneEuro {
   }
 
   /* ----- room light: sample the camera picture so the shirt is lit like the scene ----- */
-  const light = { x: -0.35, r: 1, g: 1, b: 1 }, lightCanvas = document.createElement("canvas");
+  const light = { x: -0.35, r: 0.8, g: 0.8, b: 0.8, amb: 0.62 }, lightCanvas = document.createElement("canvas");
   lightCanvas.width = lightCanvas.height = 24;
   const lightCtx = lightCanvas.getContext("2d", { willReadFrequently: true });
   let lastLight = 0;
   function sampleLight(now) {
     if (now - lastLight < 400 || !lightCtx) return; lastLight = now;
     try {
-      lightCtx.drawImage(el.video, 0, 0, 24, 24);
-      const d = lightCtx.getImageData(0, 0, 24, 24).data;
-      let r = 0, g = 0, b = 0, lumL = 0, lumR = 0; const lums = new Float32Array(d.length / 4);
-      for (let i = 0; i < d.length; i += 4) {
-        r += d[i]; g += d[i + 1]; b += d[i + 2];
-        const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        if ((i / 4) % 24 < 12) lumL += l; else lumR += l;
-        lums[i / 4] = l;
+      const v = el.video, lm = pose.target, vis = (i) => lm && lm[i] && lm[i].visibility > 0.5;
+      lightCtx.drawImage(v, 0, 0, 24, 24);
+      let box = null;
+      if (lm) { const xs = [11, 12, 23, 24].filter((i) => lm[i]).map((i) => lm[i].x), ys = [11, 12, 23, 24].filter((i) => lm[i]).map((i) => lm[i].y); if (xs.length === 4) { const pad = 0.5 * (Math.max(...xs) - Math.min(...xs)) + 0.03; box = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad]; } }
+      const sc = sceneLight(lightCtx.getImageData(0, 0, 24, 24).data, 24, 24, box);
+      // The wearer's face, when it shows, says which side the light is on and how hard it is.
+      let side = sc.side, contrast = 0.12;
+      if (vis(LM.EAR_L) && vis(LM.EAR_R) && vis(LM.EYE_L) && vis(LM.EYE_R) && lm[0]) {
+        const w = Math.abs(lm[LM.EAR_L].x - lm[LM.EAR_R].x) * v.videoWidth * 0.8;
+        if (w >= 10) {
+          lightCtx.drawImage(v, lm[0].x * v.videoWidth - w / 2, lm[0].y * v.videoHeight - w / 2, w, w, 0, 0, 8, 8);
+          const f = faceLight(lightCtx.getImageData(0, 0, 8, 8).data, 8, 8); side = f.side; contrast = f.contrast;
+        }
       }
-      const n = (d.length / 4) * 255; r /= n; g /= n; b /= n;
-      const luma = Math.max(0.05, 0.299 * r + 0.587 * g + 0.114 * b);
-      const clamp = (v, a, z) => Math.min(z, Math.max(a, v));
-      lums.sort(); const p95 = lums[Math.floor(lums.length * 0.95)] / 255;
-      // Brightness of the shirt: follows the picture's average, and never brighter than the brightest things in it.
-      const expo = Math.min(clamp(0.3 + 0.8 * luma, 0.35, 0.95), p95 + 0.05);
-      const tint = (c) => expo * (0.35 + 0.65 * clamp(c / luma, 0.75, 1.25));
-      const x = clamp(((lumR - lumL) / Math.max(1, lumR + lumL)) * 3, -0.7, 0.7);
-      const k = 0.25;
-      light.r += k * (tint(r) - light.r); light.g += k * (tint(g) - light.g); light.b += k * (tint(b) - light.b); light.x += k * (x - light.x);
+      const k = 0.25, amb = Math.max(0.4, Math.min(0.82, 0.8 - 1.1 * contrast));
+      light.r += k * (sc.level * sc.tint[0] - light.r); light.g += k * (sc.level * sc.tint[1] - light.g); light.b += k * (sc.level * sc.tint[2] - light.b);
+      light.x += k * (side - light.x); light.amb += k * (amb - light.amb); state.light = light;
     } catch { /* lighting match is optional */ }
   }
 
@@ -2073,6 +2106,7 @@ class OneEuro {
       "Body shape: " + (shaperFailed ? "outline reading failed on this device" : `${shape.waist.length} waist and ${shape.hip.length} hip readings in ${shape.tries} tries`) + "; fit: " + fitText(),
       "Turn: " + fmt(((state.yaw || 0) * 180) / Math.PI, 0) + " deg" + (state.back ? ", seen from behind" : ""),
       "Tracking: " + p.speed + ", on " + p.delegate,
+      "Light: " + `level ${fmt(Math.max(light.r, light.g, light.b), 2)}, from ${light.x < -0.1 ? "the left" : light.x > 0.1 ? "the right" : "the front"}, ${light.amb > 0.7 ? "flat" : light.amb > 0.55 ? "soft" : "hard"}`,
       "Cloth: " + (clothOn() ? `${el.factCloth.textContent}; ${fmt(state.clothMs, 1)} ms per redraw, furthest from rest ${fmt(state.clothMove, 1)} cm` : state.physics ? "not simulated for this garment" : "physics off"),
       "Settings: " + JSON.stringify(p.settings, null, 1),
       "Capabilities: " + (p.caps ? JSON.stringify(p.caps, null, 1) : "not available in this browser"),
