@@ -875,16 +875,23 @@ class Cloth {
       for (let c = 0; c < 3; c++) { const nv = pos[b + c]; if (carry) { const d = nv - r[a + c]; x[a + c] += d; p[a + c] += d; } else x[a + c] = p[a + c] = nv; r[a + c] = nv; }
       pin[j * nr + i] = j < pinRows ? 1 : 0; cut[j * nr + i] = j >= slitRow && slitCols.includes(i) ? 1 : 0;
     }
-    const id = (i, j) => j * nr + (((i % nr) + nr) % nr), A = [], B = [], L = [], K = [];
-    const add = (a, b, kind) => { if (pin[a] && pin[b]) return; A.push(a); B.push(b); K.push(kind); L.push(Math.hypot(r[a * 3] - r[b * 3], r[a * 3 + 1] - r[b * 3 + 1], r[a * 3 + 2] - r[b * 3 + 2])); };
-    for (let j = 0; j < ny; j++) {
-      if (j > 0) for (let i = 0; i < nr; i++) add(id(i, j - 1), id(i, j), 0);                       // down the cloth
-      for (let i = 0; i < nr; i++) if (!cut[id(i, j)]) add(id(i, j), id(i + 1, j), 1);               // around it
-      if (j > 0) for (let i = 0; i < nr; i++) if (!cut[id(i, j)]) { add(id(i, j - 1), id(i + 1, j), 2); add(id(i + 1, j - 1), id(i, j), 2); }   // on the bias
-      if (j > 1) for (let i = 0; i < nr; i++) add(id(i, j - 2), id(i, j), 3);                       // against folding
-      for (let i = 0; i < nr; i++) if (!cut[id(i, j)] && !cut[id(i + 1, j)]) add(id(i, j), id(i + 2, j), 3);
+    const id = (i, j) => j * nr + (((i % nr) + nr) % nr);
+    // Which points are joined depends only on the layout, so the list of threads is made once and reused;
+    // a new resting shape only changes their lengths.
+    const key = pinRows + "/" + slitRow + "/" + slitCols.join();
+    if (key !== this.topo) {
+      this.topo = key; const A = [], B = [], K = [];
+      const add = (a, b, kind) => { if (pin[a] && pin[b]) return; A.push(a); B.push(b); K.push(kind); };
+      for (let j = 0; j < ny; j++) {
+        if (j > 0) for (let i = 0; i < nr; i++) add(id(i, j - 1), id(i, j), 0);                       // down the cloth
+        for (let i = 0; i < nr; i++) if (!cut[id(i, j)]) add(id(i, j), id(i + 1, j), 1);               // around it
+        if (j > 0) for (let i = 0; i < nr; i++) if (!cut[id(i, j)]) { add(id(i, j - 1), id(i + 1, j), 2); add(id(i + 1, j - 1), id(i, j), 2); }   // on the bias
+        if (j > 1) for (let i = 0; i < nr; i++) add(id(i, j - 2), id(i, j), 3);                       // against folding
+        for (let i = 0; i < nr; i++) if (!cut[id(i, j)] && !cut[id(i + 1, j)]) add(id(i, j), id(i + 2, j), 3);
+      }
+      this.A = Uint16Array.from(A); this.B = Uint16Array.from(B); this.K = Uint8Array.from(K); this.L = new Float32Array(A.length);
     }
-    this.A = Uint16Array.from(A); this.B = Uint16Array.from(B); this.K = Uint8Array.from(K); this.L = Float32Array.from(L);
+    for (let c = 0; c < this.A.length; c++) { const a = this.A[c] * 3, b = this.B[c] * 3; this.L[c] = Math.hypot(r[a] - r[b], r[a + 1] - r[b + 1], r[a + 2] - r[b + 2]); }
     // No point can be further from where its column is pinned than the cloth between them is long.
     for (let i = 0; i < nr; i++) { let g = 0; for (let j = 0; j < ny; j++) { const a = id(i, j); if (j < pinRows) { this.geo[a] = 0; this.anchor[a] = a; continue; } const u = id(i, j - 1); g += Math.hypot(r[a * 3] - r[u * 3], r[a * 3 + 1] - r[u * 3 + 1], r[a * 3 + 2] - r[u * 3 + 2]); this.geo[a] = g; this.anchor[a] = id(i, pinRows - 1); } }
     this.pinRows = pinRows; this.normals(r, this.n0); this.ready = true;
@@ -1095,7 +1102,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "27 (cloth lit like the scene)";
+  const BUILD = "28 (more processor time for tracking)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1975,6 +1982,9 @@ class OneEuro {
     requestAnimationFrame(frame);
     const v = el.video, vw = v.videoWidth, vh = v.videoHeight;
     if (!renderer || !vw) return;
+    // The tracker and the drawing share one processor. Thirty redraws a second look smooth; more than that only takes
+    // time away from the tracker, which is what makes the garment follow the body.
+    if (now - lastFrame < 31) return;
     const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000)); lastFrame = now;
     state.drawFps += 0.1 * (1 / dt - state.drawFps);
     const W = el.view.clientWidth, H = el.view.clientHeight, map = coverMap(vw, vh, W, H);
