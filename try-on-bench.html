@@ -665,6 +665,43 @@ function torsoTube(spec, nr, ny, body) {
   return { pos, nrm, g, uv, fit, body: bodyRows };
 }
 
+// The collar as its own piece of cloth standing round the neck, instead of a shape painted on the chest: a band for
+// a kurta; for a shirt a stand with a leaf turned down over it, ending in two points at the front. It is a strip of
+// nSeg + 1 columns round the neck (from just beside the front opening, round the back, to the other side) by 4 rows
+// from the neck seam to the free edge. Same centimetres as the body: x across, y down, z to the front.
+function collarMesh(spec, nSeg) {
+  const cols = nSeg + 1, rows = 4, n = cols * rows, pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), g = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+  const shirt = spec.collar === 1, nx = spec.neckHalf, rz = 0.8 * nx, h = Math.max(2, Math.min(4, 0.065 * spec.shoulder)), gap = shirt ? 0 : 0.045;      // a shirt collar is buttoned shut; a band collar keeps a small notch
+  for (let i = 0; i < cols; i++) {
+    const th = gap + (2 * Math.PI - 2 * gap) * (i / nSeg), sn = Math.sin(th), cs = Math.cos(th), f3 = Math.pow(Math.max(0, cs), 3), side = sn >= 0 ? 1 : -1;
+    const yR = (cs >= 0 ? spec.neckDrop : 1.5) * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(sn), 2.6)), 1 / 2.6);
+    const R = [nx * sn, yR + 0.6, rz * cs], T = [0.93 * nx * sn, yR - h, 0.93 * rz * cs];           // seam (tucked under the body's edge) and top of the stand
+    let pts;
+    if (shirt) {
+      // The leaf's free edge: across the back it hangs a hand's width below the stand; at the front it runs in a
+      // straight line from the side of the neck down to the collar point, which is what gives a shirt collar its shape.
+      const out = 1.2 + 2 * f3, sideY = -h + 4.2, tip = [0.42 * nx + 1.6, spec.neckDrop - h + 7.4];
+      let lx = (nx + 1.2) * sn, ly = yR - h + 4.2;
+      if (cs > 0) { const t = Math.pow(Math.min(1, Math.acos(cs) / (Math.PI / 2)), 0.85); lx = side * (tip[0] + (nx + 1.2 - tip[0]) * t); ly = tip[1] + (sideY - tip[1]) * t; }
+      pts = [R, T, [0.99 * nx * sn, yR - h - 0.3, 0.99 * rz * cs], [lx, ly, (rz + out) * cs]];
+    } else pts = [R, [R[0] + (T[0] - R[0]) / 3, R[1] + (T[1] - R[1]) / 3, R[2] + (T[2] - R[2]) / 3], [R[0] + ((T[0] - R[0]) * 2) / 3, R[1] + ((T[1] - R[1]) * 2) / 3, R[2] + ((T[2] - R[2]) * 2) / 3], T];
+    let run = 0;
+    for (let j = 0; j < rows; j++) {
+      const q = (j * cols + i) * 3; pos[q] = pts[j][0]; pos[q + 1] = pts[j][1]; pos[q + 2] = pts[j][2];
+      if (j) run += Math.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1], pts[j][2] - pts[j - 1][2]);
+      g[q] = 0; g[q + 1] = j / (rows - 1); g[q + 2] = 2; uv[(q / 3) * 2] = th * nx; uv[(q / 3) * 2 + 1] = run;
+    }
+  }
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {        // normals from the surface itself, facing away from the neck
+    const a = (j * cols + Math.max(0, i - 1)) * 3, b = (j * cols + Math.min(cols - 1, i + 1)) * 3, u = (Math.max(0, j - 1) * cols + i) * 3, d = (Math.min(rows - 1, j + 1) * cols + i) * 3, q = (j * cols + i) * 3;
+    const ax = pos[b] - pos[a], ay = pos[b + 1] - pos[a + 1], az = pos[b + 2] - pos[a + 2], bx = pos[d] - pos[u], by = pos[d + 1] - pos[u + 1], bz = pos[d + 2] - pos[u + 2];
+    let x = ay * bz - az * by, y = az * bx - ax * bz, z = ax * by - ay * bx; const l = Math.hypot(x, y, z) || 1;
+    if (x * pos[q] + z * pos[q + 2] < 0) { x = -x; y = -y; z = -z; }
+    nrm[q] = x / l; nrm[q + 1] = y / l; nrm[q + 2] = z / l;
+  }
+  return { pos, nrm, g, uv, cols, rows };
+}
+
 // Sleeve as a tube sewn to the armhole. Each ring is set by two points: one on the sleeve's top edge and one on
 // its underarm seam. The underarm seam runs straight from the underarm point to the sleeve end, as a sewn seam does,
 // so the underside cannot sag or pinch when the arm is raised. The top edge curves over the shoulder onto the arm.
@@ -1102,7 +1139,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "28 (more processor time for tracking)";
+  const BUILD = "29 (sewn collar, cuffs, sleeve shading, weave)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1138,7 +1175,8 @@ class OneEuro {
   window.__bench = state; // lets a test harness read the live numbers
 
   let THREE = null, landmarker = null, renderer = null, scene = null, camera = null;
-  let torso = null, sleeveL = null, sleeveR = null, joints = null;
+  let torso = null, sleeveL = null, sleeveR = null, collar = null, joints = null;
+  const NC = 44;
   const materials = [], yawSin = new OneEuro(1.2, 0.2), yawCos = new OneEuro(1.2, 0.2), hipSin = new OneEuro(1.2, 0.2), hipCos = new OneEuro(1.2, 0.2);
   let printTex = null;
   let spec = garmentSpec(SIZE_CHART.find((r) => r.id === state.sizeId) || SIZE_CHART[5], "tee");
@@ -1269,14 +1307,14 @@ class OneEuro {
         fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
         capA: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, capB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, isTorso: { value: 0 },
         lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(0.8, 0.8, 0.8) }, amb: { value: 0.62 },
-        style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 }, drape: { value: state.cloth ? state.cloth.stiff : 0.32 }, feather: { value: 2.5 },
+        style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 }, drape: { value: state.cloth ? state.cloth.stiff : 0.32 }, feather: { value: 2.5 }, sleeveLong: { value: 0 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
         k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, back: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
       },
       vertexShader: `
         attribute vec3 g; attribute vec3 rest; uniform vec2 O; uniform vec2 U; uniform vec2 U2; uniform vec2 V; uniform float k; uniform float yaw; uniform float yaw2; uniform float hipY; uniform vec4 sway; uniform float back; attribute float fit;
-        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
+        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit; varying float vPz;
         void main() {
           float w = smoothstep(0.0, hipY, rest.y);     // 0 at the shoulders, 1 from the hips down
           vec2 Ux = normalize(mix(U, U2, w));               // across the body: shoulder line at the top, hip line at the hem
@@ -1288,15 +1326,16 @@ class OneEuro {
           vG = g; vP = rest; vUv = uv; vFit = fit;        // patterns, collar and print stay on the cloth as cut, wherever it swings
           float sw = smoothstep(sway.z, sway.w, rest.y); sw *= sw;   // free cloth below the underarm swings, most at the hem
           vec2 scr = O + ((p.x + sway.x * sw) * Ux + (p.y + sway.y * sw) * V) * k; vScr = scr;
-          gl_Position = projectionMatrix * vec4(scr, p.z * 0.04, 1.0);
+          vPz = p.z;
+          gl_Position = projectionMatrix * vec4(scr, p.z * 0.04 + (g.z > 1.5 ? 0.9 : 0.0), 1.0);   // the collar lies over the body and sleeves
         }`,
       fragmentShader: `
         precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol; uniform float amb;
-        uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style; uniform float drape; uniform float feather;
+        uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style; uniform float drape; uniform float feather; uniform float sleeveLong;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
-        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
+        varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit; varying float vPz;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -1307,6 +1346,7 @@ class OneEuro {
           for (int i = 0; i < 8; i++) {
             vec4 a = capA[i]; vec4 b = capB[i];
             if (b.z <= 0.0 || (b.w > 0.5 && isTorso < 0.5)) continue;
+            if (vG.z > 1.5 && i == 0 && vPz > 0.0) continue;   // the neck hides only the part of the collar that passes behind it
             vec2 pa = vScr - a.xy; vec2 ba = a.zw - a.xy;
             float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
             float d = length(pa - ba * h) - mix(b.x, b.y, h);
@@ -1345,11 +1385,15 @@ class OneEuro {
             vec2 q0 = vec2(abs(vP.x), max(vP.y, 0.0));          // flatter at the bottom than a circle
             float e = pow(q0.x / neck.x, 2.6) + pow(q0.y / drop, 2.6);
             if (e < 1.0) discard;                           // neck opening
-            float bandW = style.x > 0.5 ? 2.8 : 2.0;
-            float e2 = pow(q0.x / (neck.x + bandW), 2.6) + pow(q0.y / (drop + bandW), 2.6);
-            if (e2 < 1.0 && !inside) {                      // crew rib, or the stand of a shirt or band collar
-              float rib = style.x > 0.5 ? 1.12 : 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
-              gl_FragColor = vec4(pow(pow(max(col, 0.0), vec3(2.2)) * lightCol * 0.72 * rib * (amb + (1.0 - amb) * n.z), vec3(0.4545)), aOut); return;
+            if (style.x < 0.5) {                            // crew neck: a ribbed band round the opening
+              float e2 = pow(q0.x / (neck.x + 2.0), 2.6) + pow(q0.y / (drop + 2.0), 2.6);
+              if (e2 < 1.0 && !inside) {
+                float rib = 0.93 + 0.07 * sin(atan(vP.y / drop, vP.x / neck.x) * 60.0);
+                gl_FragColor = vec4(pow(pow(max(col, 0.0), vec3(2.2)) * lightCol * 0.72 * rib * (amb + (1.0 - amb) * n.z), vec3(0.4545)), aOut); return;
+              }
+            } else if (!inside) {                           // under a sewn collar the cloth is in its shadow
+              float e3 = pow(q0.x / (neck.x + 1.2), 2.6) + pow(q0.y / (drop + 1.6), 2.6);
+              col *= 1.0 - 0.2 * (1.0 - smoothstep(1.0, 2.6, e3));
             }
             if (vP.y > style.z && abs(vG.x) > 0.995) discard;     // side slits of a kurta
             if (vP.z > 0.0 && !inside && style.y > 0.5) {
@@ -1359,13 +1403,6 @@ class OneEuro {
                 if (abs(ax - 1.7) < 0.13) col *= 0.8;
                 float by = mod(vP.y - drop - 2.5, 9.0) - 4.5;
                 if (length(vec2(vP.x, by)) < 0.6) col = mix(col, vec3(0.9, 0.88, 0.84), 0.9);
-              }
-              if (style.x > 0.5 && style.x < 1.5) {          // the two points of a shirt collar
-                vec2 pA = vec2(neck.x + 2.2, -0.5), pB = vec2(0.3, drop + 1.2), pT = vec2(neck.x * 0.7 + 1.6, drop + 6.5), pp = vec2(ax, vP.y);
-                float d1 = (pB.x - pA.x) * (pp.y - pA.y) - (pB.y - pA.y) * (pp.x - pA.x);
-                float d2 = (pT.x - pB.x) * (pp.y - pB.y) - (pT.y - pB.y) * (pp.x - pB.x);
-                float d3 = (pA.x - pT.x) * (pp.y - pT.y) - (pA.y - pT.y) * (pp.x - pT.x);
-                if ((d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0) || (d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0)) col *= (min(abs(d2), abs(d3)) < 1.4 ? 0.82 : 1.1);
               }
             }
             if (hasPrint > 0.5 && vP.z > 0.0 && !inside) {  // chest print, front only
@@ -1379,13 +1416,25 @@ class OneEuro {
             if (vP.z > 0.0 && abs(vP.x - 1.2) < 0.14 && vP.y > 4.0 && vP.y < 19.0) col *= 0.78;
           }
 
+          bool isSleeve = vG.z > 0.5 && vG.z < 1.5 && style.w < 0.5, isCollar = vG.z > 1.5;
+          if (isSleeve && !inside) {
+            col *= mix(0.9, 1.0, smoothstep(-1.0, 0.0, vG.x));                  // the underside of a sleeve sits in the arm's own shade
+            if (sleeveLong > 0.5 && style.x > 0.5 && style.x < 1.5 && vG.y > 0.905) {   // shirt cuff: a doubled band with a button
+              col *= 1.06; if (vG.y < 0.915) col *= 0.74;
+            }
+          }
+          if (isCollar && !inside) col *= 1.05;                                 // a collar is two layers, crisper and a touch lighter
+          // The weave: a fine grain in the cloth's own centimetres, fading out when it is too small to see.
+          float fineW = fwidth(vUv.y) * 6.0;
+          col *= 1.0 + 0.07 * (noise(vUv * 6.0) - 0.5) * (1.0 - smoothstep(0.5, 1.4, fineW));
+
           // Folds: a loose shirt hangs in soft vertical folds below the chest, a tight one pulls across it.
           float below = smoothstep(0.3, 0.95, vG.y);
           float fq = mix(1.45, 0.6, drape);                  // soft cloth falls in many narrow folds, stiff cloth in a few broad ones
           float fold = cos(vUv.x * 0.42 * fq + 1.4 * sin(vUv.y * 0.08)) * 0.6 + cos(vUv.x * 0.9 * fq - vUv.y * 0.05 + 2.0) * 0.4;
           float pull = cos(vUv.y * 1.1 + 0.8 * sin(vUv.x * 0.16));
           float looseL = smoothstep(0.0, 0.2, -vFit), tightL = smoothstep(0.0, 0.1, vFit);   // per zone: chest, waist and hips can differ
-          float relief = isTorso > 0.5 ? (0.015 + 0.075 * looseL) * mix(1.3, 0.6, drape) * fold * below + 0.035 * tightL * pull : 0.03 * cos(vUv.x * 0.8 + vUv.y * 0.6);
+          float relief = isTorso > 0.5 ? (0.015 + 0.075 * looseL) * mix(1.3, 0.6, drape) * fold * below + 0.035 * tightL * pull : isCollar ? 0.0 : (sleeveLong > 0.5 ? 0.09 * exp(-pow((vG.y - 0.5) / 0.1, 2.0)) * cos(vUv.y * 2.4 + 1.2 * sin(vUv.x * 0.6)) : 0.0) + 0.02 * cos(vUv.x * 0.8 + vUv.y * 0.6);
 
           vec3 light = normalize(lightDir);
           float diff = max(dot(inside ? -n : n, light), 0.0);
@@ -1421,7 +1470,8 @@ class OneEuro {
     const tr = spec.type === "trousers";
     torsoBody = null; cloth.ready = false; setTube(torso, tr ? trouserSeat(spec, NR, NY) : torsoTube(spec, NR, NY));
     if (!tr) torso.material.uniforms.neck.value.set(spec.neckHalf, spec.neckDrop, 1.5);
-    for (const mt of materials) mt.uniforms.style.value.set(tr ? 0 : spec.collar, tr ? 0 : spec.placket, tr ? 1e4 : spec.slitY, tr ? 1 : 0);
+    for (const mt of materials) { mt.uniforms.style.value.set(tr ? 0 : spec.collar, tr ? 0 : spec.placket, tr ? 1e4 : spec.slitY, tr ? 1 : 0); mt.uniforms.sleeveLong.value = !tr && spec.long ? 1 : 0; }
+    if (!tr && spec.collar) setTube(collar, collarMesh(spec, NC));
     resetSwing(); applyPrint();
   }
   function selectGarment(type) {
@@ -1439,6 +1489,7 @@ class OneEuro {
     sleeveR = makeMesh(sleeveTube(spec, -1, rest, 0, NA, NS), NS + 1, NA, 0);
     torso = makeMesh(torsoTube(spec, NR, NY), NR + 1, NY, 1);
     torso.material.uniforms.isTorso.value = 1;
+    collar = makeMesh(collarMesh(garmentSpec(GARMENTS.shirt.chart[1], "shirt"), NC), NC + 1, 4, 2);
     setTorso();
     const jg = new THREE.BufferGeometry();
     jg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(33 * 3), 3));
@@ -1526,6 +1577,8 @@ class OneEuro {
 
     aim(torso, O, fr.uTop, fr.uHip, axes.v, ppcScreen, yaw, yawHip, hipY, ghost);
     torso.material.uniforms.back.value = state.back ? 1 : 0;
+    if (spec.collar) { aim(collar, O, fr.uTop, fr.uHip, axes.v, ppcScreen, yaw, yawHip, hipY, ghost); collar.material.uniforms.back.value = state.back ? 1 : 0; collar.material.uniforms.sway.value.set(0, 0, 1e4, 2e4); }
+    else collar.visible = false;
     const toG = toGarment(O, fr.uTop, axes.v, ppcScreen);
     if (simOn && cloth.ready) { torso.material.uniforms.sway.value.set(0, 0, 1e4, 2e4); runCloth(O, fr.uHip, axes.v, ppcScreen, yawHip, hipY, m, ms, dt); }
     else torso.material.uniforms.sway.value.set(swayX, swayY, spec.armhole, spec.length);
@@ -1604,6 +1657,7 @@ class OneEuro {
     const S = (p) => ({ x: p.x * map.s + map.ox, y: p.y * map.s + map.oy }), ms = screenMetrics(m, S);
     const axes = garmentAxes(ms), u = bodyFrames(m, axes).uHip, v = axes.v;
     const O = sub(ms.hMid, mul(v, spec.hipDrop * ppcScreen)), toG = toGarment(O, u, v, ppcScreen);
+    collar.visible = false;
     aim(torso, O, u, u, v, ppcScreen, yawHip, yawHip, 1e4, false);
     torso.material.uniforms.back.value = state.back ? 1 : 0; torso.material.uniforms.sway.value.set(0, 0, 1e4, 2e4);
     for (const [meshObj, side] of [[sleeveL, 1], [sleeveR, -1]]) {
@@ -1841,7 +1895,7 @@ class OneEuro {
     el.hint.hidden = !text; el.hintText.textContent = text;
   }
 
-  function hideGarment() { if (torso) torso.visible = sleeveL.visible = sleeveR.visible = false; }
+  function hideGarment() { if (torso) torso.visible = sleeveL.visible = sleeveR.visible = collar.visible = false; }
 
   /* ----- camera ----- */
   async function startCamera(opts) {
