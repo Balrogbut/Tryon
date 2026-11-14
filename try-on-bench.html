@@ -1062,7 +1062,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "25 (cleaner garment, plain size verdict)";
+  const BUILD = "26 (soft edges)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1229,7 +1229,7 @@ class OneEuro {
         fabric: { value: new THREE.Vector3(...hexToRgb(state.fabric)) }, neck: { value: new THREE.Vector3(1, 1, 1) }, alpha: { value: 1 },
         capA: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, capB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }, isTorso: { value: 0 },
         lightDir: { value: new THREE.Vector3(-0.35, -0.55, 0.76) }, lightCol: { value: new THREE.Vector3(1, 1, 1) },
-        style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 }, drape: { value: state.cloth ? state.cloth.stiff : 0.32 },
+        style: { value: new THREE.Vector4(0, 0, 1e4, 0) }, grain: { value: 0 }, pattern: { value: PATTERNS[state.pattern] || 0 }, loose: { value: 0.3 }, tight: { value: 0 }, drape: { value: state.cloth ? state.cloth.stiff : 0.32 }, feather: { value: 2.5 },
         printTex: { value: null }, hasPrint: { value: 0 }, printBox: { value: new THREE.Vector4(0, 20, 10, 10) },
         O: { value: new THREE.Vector2() }, U: { value: new THREE.Vector2(1, 0) }, U2: { value: new THREE.Vector2(1, 0) }, V: { value: new THREE.Vector2(0, 1) },
         k: { value: 1 }, yaw: { value: 0 }, yaw2: { value: 0 }, back: { value: 0 }, hipY: { value: 50 }, sway: { value: new THREE.Vector4(0, 0, 20, 70) },
@@ -1254,7 +1254,7 @@ class OneEuro {
         precision highp float;
         uniform vec3 fabric; uniform vec3 neck; uniform float alpha;
         uniform vec4 capA[8]; uniform vec4 capB[8]; uniform float isTorso; uniform vec3 lightDir; uniform vec3 lightCol;
-        uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style; uniform float drape;
+        uniform float pattern; uniform float loose; uniform float tight; uniform float grain; uniform vec4 style; uniform float drape; uniform float feather;
         uniform sampler2D printTex; uniform float hasPrint; uniform vec4 printBox;
         varying vec3 vG; varying vec3 vP; varying vec3 vN; varying vec2 vScr; varying vec2 vUv; varying float vFit;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -1278,6 +1278,13 @@ class OneEuro {
           float aOut = aBase * (1.0 - cover);
           vec3 n = normalize(vN);
           bool inside = n.z < 0.0;                          // surface faces away: we are looking at the inside of the garment
+          // Soft outline: the last few pixels at the garment's outline, shoulder tops, hem and sleeve ends fade out,
+          // as the edge of real cloth does in a camera picture, instead of ending in a hard cut line.
+          float rim = clamp(abs(n.z) / max(feather * fwidth(n.z), 0.0001), 0.0, 1.0);
+          // not where a sleeve or trouser leg is sewn on: a faded join would let the picture behind show through
+          float endD = vG.z > 0.5 ? 1.0 - vG.y : style.w > 0.5 ? vG.y : min(vG.y, 1.0 - vG.y);
+          float ends = clamp(endD / max(feather * fwidth(vG.y), 0.00001), 0.0, 1.0);
+          if (alpha > 0.9 && feather > 0.0) aOut *= rim * ends;
           if (inside && alpha < 0.9) discard;               // the see-through preview shows the outside only
 
           // Fabric colour: plain, stripes or heather, in real centimetres so it keeps its scale across sizes.
