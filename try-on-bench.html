@@ -939,7 +939,8 @@ class Cloth {
   step(dt, env) {
     if (!this.ready || !(dt > 0)) return;
     const { x, p, r, pin, nr, ny, A, B, K, L, fab } = this, n = nr * ny;
-    const sub = Math.max(1, Math.min(4, Math.ceil(dt / 0.012))), h = dt / sub, damp = Math.max(0, 1 - fab.drag * h), iters = 4;
+    // A fixed, small amount of work per redraw: when the phone is slow, more steps would only make it slower still.
+    const sub = dt > 0.022 ? 2 : 1, h = dt / sub, damp = Math.max(0, 1 - fab.drag * h), iters = 4;
     const sh = env.shift, ks = [fab.stretchK, fab.stretchK, fab.shearK, fab.bendK];
     const vMax = 350 * h;
     for (let a = 0; a < n; a++) {
@@ -1139,7 +1140,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "29 (sewn collar, cuffs, sleeve shading, weave)";
+  const BUILD = "30 (lighter cloth and drawing load)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1513,7 +1514,7 @@ class OneEuro {
   function resize() {
     if (!renderer) return;
     const W = el.view.clientWidth, H = el.view.clientHeight;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));   // the camera picture is 720 wide; drawing finer than this only takes graphics time from the tracker
     renderer.setSize(W, H, false);
     camera.left = 0; camera.right = W; camera.top = 0; camera.bottom = H; camera.updateProjectionMatrix();
   }
