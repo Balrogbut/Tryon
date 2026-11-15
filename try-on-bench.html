@@ -499,7 +499,12 @@ function neckLift(m, v) {
   const eff = effectiveShoulderPx(m), byShoulders = LIFT * eff;
   if (!m.headOk) return byShoulders;
   const byHead = -(dot(sub(m.eyeMid, m.sMid), v) + 2.2 * m.headPx);
-  return Math.max(-0.25 * eff, Math.min(byShoulders, byHead));
+  // Only raised arms lift the shoulder points. With the arms down, a chin held low or a camera held high just hides
+  // the neck; the shoulders have not moved, so the shoulder line stays where the body puts it.
+  let raised = 0;
+  for (const [sh, el] of [[m.L, m.elbowL], [m.R, m.elbowR]]) if (sh && el) raised = Math.max(raised, smooth(0.1, 0.6, -dot(sub(el, sh), v) / Math.max(1, len(sub(el, sh)))));
+  const held = Math.max(-0.25 * eff, Math.min(byShoulders, byHead));
+  return byShoulders + (held - byShoulders) * raised;
 }
 function defaultBody(spec) { return bodyShape(spec.shHalf / SEAM_OVER_JOINTS); }
 
@@ -654,7 +659,9 @@ function torsoTube(spec, nr, ny, body) {
       const yBot = hemY + spec.hemCurve * (1 - sx * sx);
       const n = (j * cols + i) * 3, nx = px / hw, nz = cz / hd, nl = Math.hypot(nx, nz) || 1;
       pos[n] = drapeX(spec, body, hw * px, hw, yRow, bh, dn + (1 - dn) * smooth(0, spec.armhole, yRow)); pos[n + 1] = yTop + (yBot - yTop) * t; pos[n + 2] = hd * cz;
-      const fx = (nx / nl) * (1 - 0.6 * (1 - e)), fz = nz / nl, fy = cz > 0 ? -slope * cz : 0, fl = Math.hypot(fx, fy, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
+      // Above the underarm the body's cloth runs straight on into the sleeve, so its side does not turn away from the
+      // light there; it turns only below the underarm, where the side of the body really is an edge.
+      const turn = smooth(spec.armhole - 2, spec.armhole + 9, yRow), fx = (nx / nl) * (0.12 + 0.88 * turn), fz = nz / nl, fy = cz > 0 ? -slope * cz : 0, fl = Math.hypot(fx, fy, fz) || 1;   // flatter shading across the shoulders, where the sleeve joins
       nrm[n] = fx / fl; nrm[n + 1] = fy / fl; nrm[n + 2] = fz / fl;
       g[n] = sx; g[n + 1] = t; g[n + 2] = 0; fit[n / 3] = strain;
       uv[(n / 3) * 2] = phi * hw; uv[(n / 3) * 2 + 1] = pos[n + 1];      // fabric coordinates in cm: around the body, down the body
@@ -1140,7 +1147,7 @@ class OneEuro {
   const VISION_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
   const VISION_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
   const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-  const BUILD = "30 (lighter cloth and drawing load)";
+  const BUILD = "31 (shoulder line, body and sleeve as one)";
   const embed = { on: /(^|[#&])embed(&|$)/.test(location.hash), product: null, printUrl: null };
   // Example size charts for the bench, one per garment type. A shop sends its own.
   const GARMENTS = {
@@ -1419,7 +1426,7 @@ class OneEuro {
 
           bool isSleeve = vG.z > 0.5 && vG.z < 1.5 && style.w < 0.5, isCollar = vG.z > 1.5;
           if (isSleeve && !inside) {
-            col *= mix(0.9, 1.0, smoothstep(-1.0, 0.0, vG.x));                  // the underside of a sleeve sits in the arm's own shade
+            col *= mix(mix(0.9, 1.0, smoothstep(-1.0, 0.0, vG.x)), 1.0, 1.0 - smoothstep(2.0, 9.0, vUv.y));   // the underside of a sleeve sits in the arm's own shade, away from the seam
             if (sleeveLong > 0.5 && style.x > 0.5 && style.x < 1.5 && vG.y > 0.905) {   // shirt cuff: a doubled band with a button
               col *= 1.06; if (vG.y < 0.915) col *= 0.74;
             }
@@ -1438,7 +1445,7 @@ class OneEuro {
           float relief = isTorso > 0.5 ? (0.015 + 0.075 * looseL) * mix(1.3, 0.6, drape) * fold * below + 0.035 * tightL * pull : isCollar ? 0.0 : (sleeveLong > 0.5 ? 0.09 * exp(-pow((vG.y - 0.5) / 0.1, 2.0)) * cos(vUv.y * 2.4 + 1.2 * sin(vUv.x * 0.6)) : 0.0) + 0.02 * cos(vUv.x * 0.8 + vUv.y * 0.6);
 
           vec3 light = normalize(lightDir);
-          float diff = max(dot(inside ? -n : n, light), 0.0);
+          float diff = clamp((dot(inside ? -n : n, light) + 0.35) / 1.35, 0.0, 1.0);   // cloth scatters light round its curves: no hard line between lit and unlit
           // amb is how much of the light reaches every side (flat, overcast light) rather than coming from one direction
           float shade = inside ? 0.55 * amb : amb + (1.0 - amb) * diff * 1.15;
           col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 0.86);          // a camera never shows cloth at full saturation
